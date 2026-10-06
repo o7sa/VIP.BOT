@@ -173,11 +173,21 @@ engine = VIPBotEngine()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("=" * 50)
     logger.info("VIP.BOT Glass Edition starting...")
     logger.info(f"Telegram configured: {bool(config.telegram.BOT_TOKEN)}")
+    logger.info(f"Channel: {config.telegram.CHANNEL_ID}")
     logger.info(f"Port: {config.web.PORT}")
     await engine.start()
+    try:
+        telegram_sender.start_polling(status_provider=engine.get_status)
+    except Exception as e:
+        logger.warning(f"Telegram polling not started: {e}")
     yield
+    try:
+        await telegram_sender.stop_polling()
+    except Exception:
+        pass
     await engine.stop()
 
 
@@ -190,12 +200,30 @@ if os.path.isdir("static"):
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    try:
+        return templates.TemplateResponse("dashboard.html", {"request": request})
+    except Exception as e:
+        logger.error(f"Dashboard template error: {e}", exc_info=True)
+        html = f"""<!DOCTYPE html><html lang="ar" dir="rtl"><head>
+<meta charset="utf-8"><title>VIP.BOT</title>
+<style>body{{font-family:sans-serif;background:#0f0c29;color:#fff;padding:40px;text-align:center}}
+a{{color:#00d4aa}}</style></head><body>
+<h1>VIP.BOT</h1>
+<p>\u0627\u0644\u0648\u0627\u062c\u0647\u0629 \u0627\u0644\u0632\u062c\u0627\u062c\u064a\u0629 \u062a\u062d\u062a \u0627\u0644\u062a\u062d\u0645\u064a\u0644...</p>
+<p><a href="/api/status">\u062d\u0627\u0644\u0629 \u0627\u0644\u0628\u0648\u062a (JSON)</a></p>
+<p><a href="/api/health">Health</a></p>
+<pre style="text-align:left;max-width:600px;margin:20px auto;background:#1a1a2e;padding:16px;border-radius:8px;overflow:auto">{e}</pre>
+</body></html>"""
+        return HTMLResponse(content=html, status_code=200)
 
 
 @app.get("/api/status")
 async def api_status():
-    return JSONResponse(engine.get_status())
+    try:
+        return JSONResponse(engine.get_status())
+    except Exception as e:
+        logger.error(f"status error: {e}")
+        return JSONResponse({"error": str(e), "running": engine.running}, status_code=200)
 
 
 @app.get("/api/health")
