@@ -12,8 +12,8 @@ from typing import List, Optional
 #  🔑 ضع توكن التليجرام والآي دي هنا مباشرة (بدون متغيرات بيئة)
 # ============================================================
 TELEGRAM_BOT_TOKEN = "8976865494:AAEoEOA17SLSQf1V8SrFvYE31NgPZOGuEs0"
-TELEGRAM_CHANNEL_ID = "PQYNC"
-TELEGRAM_ADMIN_ID = "ID: 8952278702"
+TELEGRAM_CHANNEL_ID = "@PQYNC"          # لازم يبدأ بـ @ أو رقم القناة الكامل
+TELEGRAM_ADMIN_ID = "8952278702"        # رقم فقط بدون ID:
 # ============================================================
 
 
