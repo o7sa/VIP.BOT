@@ -1,5 +1,6 @@
 """
-Configuration Settings for VIP.BOT - Professional XAUUSD Trading Bot
+VIP.BOT Configuration Settings
+Professional XAUUSD Trading Bot - Glass Dashboard Edition
 """
 
 import os
@@ -7,109 +8,106 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 
+# ============================================================
+#  🔑 ضع توكن التليجرام والآي دي هنا مباشرة (بدون متغيرات بيئة)
+# ============================================================
+TELEGRAM_BOT_TOKEN = ""          # مثال: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+TELEGRAM_CHANNEL_ID = ""         # مثال: "@your_channel" أو "-1001234567890"
+TELEGRAM_ADMIN_ID = ""           # مثال: "123456789"
+# ============================================================
+
+
 @dataclass
 class BIQuoteConfig:
-    """BIQUOTE API Configuration"""
     BASE_URL: str = "https://biquote.io/api"
     SYMBOL: str = "XAUUSD"
     TIMEOUT: int = 30
     MAX_RETRIES: int = 3
-    
+
 
 @dataclass
 class TelegramConfig:
-    """Telegram Bot Configuration"""
-    BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "")
-    ADMIN_ID: str = os.getenv("TELEGRAM_ADMIN_ID", "")
+    BOT_TOKEN: str = TELEGRAM_BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    CHANNEL_ID: str = TELEGRAM_CHANNEL_ID or os.getenv("TELEGRAM_CHANNEL_ID", "")
+    ADMIN_ID: str = TELEGRAM_ADMIN_ID or os.getenv("TELEGRAM_ADMIN_ID", "")
     MESSAGE_FORMAT: str = "HTML"
-    
+
 
 @dataclass
 class TradingConfig:
-    """Trading Strategy Configuration"""
-    DAILY_TRADES_LIMIT: int = 20
+    DAILY_TRADES_LIMIT: int = 25
     LOT_SIZE: float = 0.1
     LEVERAGE: int = 100
-    
-    # Stop Loss and Take Profit (in points)
-    DEFAULT_STOP_LOSS: int = 50
-    DEFAULT_TAKE_PROFIT: int = 100
+    DEFAULT_STOP_LOSS: int = 40
+    DEFAULT_TAKE_PROFIT: int = 80
     TRAILING_STOP: bool = True
-    TRAILING_STOP_DISTANCE: int = 30
-    
-    # Scalping Settings
-    SCALPING_AGGRESSION: float = 0.8  # 0.1-1.0
-    MIN_PROFIT_TARGET: int = 10
-    MAX_DRAWDOWN_PER_TRADE: float = 0.02  # 2%
-    
+    TRAILING_STOP_DISTANCE: int = 25
+    SCALPING_AGGRESSION: float = 0.75
+    MIN_PROFIT_TARGET: int = 8
+    MAX_DRAWDOWN_PER_TRADE: float = 0.02
+    MIN_SIGNAL_STRENGTH: float = 0.48
+    MIN_CONFIDENCE: float = 0.50
+
 
 @dataclass
 class TechnicalAnalysisConfig:
-    """Technical Analysis Configuration"""
-    # Timeframes (in minutes)
     TIMEFRAMES: List[int] = field(default_factory=lambda: [1, 5, 15, 30, 60, 240])
-    
-    # Candlestick Patterns
     ENABLE_CANDLE_PATTERNS: bool = True
-    CANDLE_PATTERN_LOOKBACK: int = 100
-    
-    # Support and Resistance
+    CANDLE_PATTERN_LOOKBACK: int = 120
     ENABLE_SR_LEVELS: bool = True
-    SR_LOOKBACK_PERIODS: int = 500
-    SR_STRENGTH_THRESHOLD: float = 0.6
-    
-    # Trend Detection
+    SR_LOOKBACK_PERIODS: int = 400
+    SR_STRENGTH_THRESHOLD: float = 0.55
     ENABLE_TREND_ANALYSIS: bool = True
-    TREND_PERIOD: int = 50
-    
-    # Volume Analysis
+    TREND_PERIOD: int = 40
     ENABLE_VOLUME_ANALYSIS: bool = True
-    VOLUME_SPIKE_THRESHOLD: float = 2.0
-    
+    VOLUME_SPIKE_THRESHOLD: float = 1.7
+
 
 @dataclass
 class RiskManagementConfig:
-    """Risk Management Configuration"""
-    MAX_DAILY_LOSS: float = 0.10  # 10% of capital
-    MAX_DAILY_PROFIT: float = 0.20  # 20% of capital
-    MAX_OPEN_TRADES: int = 5
-    MAX_TRADE_RISK_PERCENT: float = 0.02  # 2% per trade
-    
-    # Drawdown Protection
-    MAX_DRAWDOWN: float = 0.15  # 15%
-    STOP_TRADING_AT_DRAWDOWN: float = 0.12  # 12%
-    
+    MAX_DAILY_LOSS: float = 0.12
+    MAX_DAILY_PROFIT: float = 0.25
+    MAX_OPEN_TRADES: int = 6
+    MAX_TRADE_RISK_PERCENT: float = 0.02
+    MAX_DRAWDOWN: float = 0.18
+    STOP_TRADING_AT_DRAWDOWN: float = 0.14
+
 
 @dataclass
 class SignalConfig:
-    """Signal Generation Configuration"""
-    SIGNAL_CONFIDENCE_THRESHOLD: float = 0.7
-    MIN_SIGNAL_STRENGTH: float = 0.65
-    CONFIRMATION_REQUIRED: bool = True
-    CONFIRMATION_TIMEFRAMES: int = 2
-    
-    # Signal Types
+    SIGNAL_CONFIDENCE_THRESHOLD: float = 0.50
+    MIN_SIGNAL_STRENGTH: float = 0.48
+    CONFIRMATION_REQUIRED: bool = False
+    CONFIRMATION_TIMEFRAMES: int = 1
     ENABLE_BUY_SIGNALS: bool = True
     ENABLE_SELL_SIGNALS: bool = True
     ENABLE_REVERSAL_SIGNALS: bool = True
     ENABLE_BREAKOUT_SIGNALS: bool = True
-    
+    CANDLE_PATTERN_WEIGHT: float = 0.45
+    INDICATOR_WEIGHT: float = 0.30
+    VOLUME_WEIGHT: float = 0.15
+    TREND_WEIGHT: float = 0.10
+
+
+@dataclass
+class WebConfig:
+    HOST: str = "0.0.0.0"
+    PORT: int = int(os.getenv("PORT", 10000))
+    DEBUG: bool = False
+    REFRESH_INTERVAL_MS: int = 3000
+
 
 @dataclass
 class AppConfig:
-    """Main Application Configuration"""
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     LOG_LEVEL: str = "INFO"
     DATA_STORE_DAYS: int = 30
     CACHE_ENABLED: bool = True
-    CACHE_TTL: int = 60  # seconds
-    
+    CACHE_TTL: int = 45
+    BOT_LOOP_INTERVAL: float = 25.0
 
-# Global Configuration Instance
+
 class Config:
-    """Global Configuration Manager"""
-    
     def __init__(self):
         self.biquote = BIQuoteConfig()
         self.telegram = TelegramConfig()
@@ -117,42 +115,23 @@ class Config:
         self.technical = TechnicalAnalysisConfig()
         self.risk = RiskManagementConfig()
         self.signal = SignalConfig()
+        self.web = WebConfig()
         self.app = AppConfig()
-    
+
     def load_from_env(self):
-        """Load configuration from environment variables"""
-        # BIQUOTE
         if "BIQUOTE_BASE_URL" in os.environ:
             self.biquote.BASE_URL = os.environ["BIQUOTE_BASE_URL"]
         if "BIQUOTE_SYMBOL" in os.environ:
             self.biquote.SYMBOL = os.environ["BIQUOTE_SYMBOL"]
-        
-        # Telegram
-        if "TELEGRAM_BOT_TOKEN" in os.environ:
-            self.telegram.BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-        if "TELEGRAM_CHANNEL_ID" in os.environ:
-            self.telegram.CHANNEL_ID = os.environ["TELEGRAM_CHANNEL_ID"]
-        if "TELEGRAM_ADMIN_ID" in os.environ:
-            self.telegram.ADMIN_ID = os.environ["TELEGRAM_ADMIN_ID"]
-        
-        # Trading
         if "DAILY_TRADES_LIMIT" in os.environ:
             self.trading.DAILY_TRADES_LIMIT = int(os.environ["DAILY_TRADES_LIMIT"])
         if "LOT_SIZE" in os.environ:
             self.trading.LOT_SIZE = float(os.environ["LOT_SIZE"])
-        
-        # Debug
         if "DEBUG" in os.environ:
             self.app.DEBUG = os.environ["DEBUG"].lower() == "true"
+        if "PORT" in os.environ:
+            self.web.PORT = int(os.environ["PORT"])
 
 
-# Create global config instance
 config = Config()
 config.load_from_env()
-
-
-if __name__ == "__main__":
-    print("VIP.BOT Configuration:")
-    print(f"  BIQUOTE: {config.biquote.BASE_URL}/{config.biquote.SYMBOL}")
-    print(f"  Daily Trades Limit: {config.trading.DAILY_TRADES_LIMIT}")
-    print(f"  Debug Mode: {config.app.DEBUG}")
