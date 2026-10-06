@@ -11,9 +11,9 @@ from typing import List, Optional
 # ============================================================
 #  🔑 ضع توكن التليجرام والآي دي هنا مباشرة (بدون متغيرات بيئة)
 # ============================================================
-TELEGRAM_BOT_TOKEN = ""          # مثال: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-TELEGRAM_CHANNEL_ID = ""         # مثال: "@your_channel" أو "-1001234567890"
-TELEGRAM_ADMIN_ID = ""           # مثال: "123456789"
+TELEGRAM_BOT_TOKEN = "8976865494:AAEoEOA17SLSQf1V8SrFvYE31NgPZOGuEs0"          # مثال: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+TELEGRAM_CHANNEL_ID = "PQYNC"         # مثال: "@your_channel" أو "-1001234567890"
+TELEGRAM_ADMIN_ID = "ID: 8952278702"           # مثال: "123456789"
 # ============================================================
 
 
