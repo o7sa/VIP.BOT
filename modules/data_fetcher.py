@@ -1,10 +1,10 @@
 """
 Data Fetcher Module - Fetches XAUUSD data from BIQUOTE API
+Optimized for speed and reliability
 """
 
 import asyncio
 import aiohttp
-import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
@@ -17,15 +17,44 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Candle:
-    """Represents a single candlestick"""
     timestamp: datetime
     open: float
     high: float
     low: float
     close: float
     volume: float
-    timeframe: str
-    
+    timeframe: str = "1m"
+
+    @property
+    def body(self) -> float:
+        return abs(self.close - self.open)
+
+    @property
+    def range(self) -> float:
+        return self.high - self.low
+
+    @property
+    def is_bullish(self) -> bool:
+        return self.close > self.open
+
+    @property
+    def is_bearish(self) -> bool:
+        return self.close < self.open
+
+    @property
+    def upper_wick(self) -> float:
+        return self.high - max(self.open, self.close)
+
+    @property
+    def lower_wick(self) -> float:
+        return min(self.open, self.close) - self.low
+
+    @property
+    def body_ratio(self) -> float:
+        if self.range == 0:
+            return 0.0
+        return self.body / self.range
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "timestamp": self.timestamp.isoformat(),
@@ -34,13 +63,24 @@ class Candle:
             "low": self.low,
             "close": self.close,
             "volume": self.volume,
-            "timeframe": self.timeframe
+            "timeframe": self.timeframe,
+            "is_bullish": self.is_bullish,
+            "body": round(self.body, 5),
+            "range": round(self.range, 5)
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], timeframe: str = "1m") -> 'Candle':
+    def from_dict(cls, data: Dict[str, Any], timeframe: str = "1m") -> "Candle":
+        ts = data.get("timestamp") or data.get("time") or data.get("t")
+        if isinstance(ts, (int, float)):
+            timestamp = datetime.utcfromtimestamp(ts / 1000 if ts > 1e12 else ts)
+        else:
+            try:
+                timestamp = datetime.fromisoformat(str(ts).replace("Z", "+00:00").replace("+00:00", ""))
+            except Exception:
+                timestamp = datetime.utcnow()
         return cls(
-            timestamp=datetime.fromisoformat(data.get("timestamp", data.get("time", ""))),
+            timestamp=timestamp,
             open=float(data.get("open", data.get("o", 0))),
             high=float(data.get("high", data.get("h", 0))),
             low=float(data.get("low", data.get("l", 0))),
@@ -52,45 +92,52 @@ class Candle:
 
 @dataclass
 class MarketData:
-    """Represents current market data"""
     symbol: str
     bid: float
     ask: float
     timestamp: datetime
-    volume: float
-    
+    volume: float = 0.0
+
+    @property
+    def mid(self) -> float:
+        return (self.bid + self.ask) / 2
+
+    @property
+    def spread(self) -> float:
+        return self.ask - self.bid
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "symbol": self.symbol,
             "bid": self.bid,
             "ask": self.ask,
+            "mid": round(self.mid, 5),
+            "spread": round(self.spread, 5),
             "timestamp": self.timestamp.isoformat(),
             "volume": self.volume
         }
 
 
 class BIQuoteClient:
-    """Client for fetching data from BIQUOTE API"""
-    
     def __init__(self):
         self.base_url = config.biquote.BASE_URL
         self.symbol = config.biquote.SYMBOL
         self.timeout = config.biquote.TIMEOUT
         self.max_retries = config.biquote.MAX_RETRIES
         self.session: Optional[aiohttp.ClientSession] = None
-        
+
     async def __aenter__(self):
-        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        self.session = aiohttp.ClientSession(timeout=timeout)
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.session:
             await self.session.close()
-    
+            self.session = None
+
     async def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict[str, Any]:
-        """Make HTTP request with retry logic"""
-        url = f"{self.base_url}/{endpoint}"
-        
+        url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
         for attempt in range(self.max_retries):
             try:
                 async with self.session.get(url, params=params) as response:
@@ -98,206 +145,106 @@ class BIQuoteClient:
                         data = await response.json()
                         if data and "error" not in data:
                             return data
-                        else:
-                            logger.error(f"API Error: {data.get('error', 'Unknown error')}")
+                        logger.warning(f"API returned error: {data}")
                     elif response.status == 429:
-                        retry_after = int(response.headers.get("Retry-After", 1))
-                        await asyncio.sleep(retry_after * (attempt + 1))
+                        await asyncio.sleep(1.5 * (attempt + 1))
                     else:
-                        logger.error(f"HTTP Error: {response.status}")
-                        await asyncio.sleep(1 * (attempt + 1))
-                        
-            except aiohttp.ClientError as e:
-                logger.error(f"Request failed (attempt {attempt + 1}): {e}")
-                await asyncio.sleep(1 * (attempt + 1))
-        
-        raise Exception(f"Failed to fetch data from {url} after {self.max_retries} attempts")
-    
+                        logger.error(f"HTTP {response.status} for {url}")
+                        await asyncio.sleep(0.8 * (attempt + 1))
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout attempt {attempt+1} for {url}")
+                await asyncio.sleep(1.0 * (attempt + 1))
+            except Exception as e:
+                logger.error(f"Request error attempt {attempt+1}: {e}")
+                await asyncio.sleep(1.0 * (attempt + 1))
+        raise Exception(f"Failed after {self.max_retries} attempts: {url}")
+
     async def get_current_price(self) -> MarketData:
-        """Get current bid/ask price"""
         try:
             data = await self._make_request("ticker", {"symbol": self.symbol})
-            
-            if data and "data" in data and len(data["data"]) > 0:
-                ticker = data["data"][0]
+            if data and "data" in data and data["data"]:
+                t = data["data"][0]
                 return MarketData(
                     symbol=self.symbol,
-                    bid=float(ticker.get("bid", ticker.get("b", 0))),
-                    ask=float(ticker.get("ask", ticker.get("a", 0))),
-                    timestamp=datetime.fromisoformat(ticker.get("timestamp", datetime.utcnow().isoformat())),
-                    volume=float(ticker.get("volume", 0))
+                    bid=float(t.get("bid", t.get("b", 0))),
+                    ask=float(t.get("ask", t.get("a", 0))),
+                    timestamp=datetime.utcnow(),
+                    volume=float(t.get("volume", t.get("v", 0)))
                 )
-            else:
-                logger.error(f"Unexpected response format: {data}")
-                raise ValueError("Invalid ticker data format")
-                
+            if "bid" in data:
+                return MarketData(
+                    symbol=self.symbol,
+                    bid=float(data["bid"]),
+                    ask=float(data.get("ask", data["bid"])),
+                    timestamp=datetime.utcnow(),
+                    volume=float(data.get("volume", 0))
+                )
+            raise ValueError(f"Unexpected ticker format: {list(data.keys())}")
         except Exception as e:
-            logger.error(f"Failed to get current price: {e}")
+            logger.error(f"get_current_price failed: {e}")
             raise
-    
-    async def get_historical_candles(
-        self, 
-        timeframe: str = "1m", 
-        limit: int = 1000
-    ) -> List[Candle]:
-        """Get historical candlestick data"""
+
+    async def get_historical_candles(self, timeframe: str = "1m", limit: int = 300) -> List[Candle]:
         try:
-            # Convert timeframe to minutes
-            tf_map = {
-                "1m": 1,
-                "5m": 5,
-                "15m": 15,
-                "30m": 30,
-                "1h": 60,
-                "4h": 240,
-                "1d": 1440
-            }
-            tf_minutes = tf_map.get(timeframe, 1)
-            
-            data = await self._make_request(
-                "klines", 
-                {
-                    "symbol": self.symbol,
-                    "interval": timeframe,
-                    "limit": limit
-                }
-            )
-            
+            data = await self._make_request("klines", {
+                "symbol": self.symbol,
+                "interval": timeframe,
+                "limit": limit
+            })
             candles = []
-            if data and "data" in data:
-                for candle_data in data["data"]:
-                    candle = Candle.from_dict(candle_data, timeframe)
-                    candles.append(candle)
-            
+            raw = data.get("data", data if isinstance(data, list) else [])
+            for item in raw:
+                try:
+                    candles.append(Candle.from_dict(item, timeframe))
+                except Exception:
+                    continue
+            candles.sort(key=lambda c: c.timestamp)
             return candles
-            
         except Exception as e:
-            logger.error(f"Failed to get historical candles: {e}")
-            raise
-    
-    async def get_multiple_timeframes(
-        self, 
-        timeframes: List[str] = None
-    ) -> Dict[str, List[Candle]]:
-        """Get candles for multiple timeframes"""
+            logger.error(f"get_historical_candles({timeframe}) failed: {e}")
+            return []
+
+    async def get_multiple_timeframes(self, timeframes: List[str] = None) -> Dict[str, List[Candle]]:
         if timeframes is None:
-            timeframes = [f"{tf}m" for tf in config.technical.TIMEFRAMES]
-        
+            timeframes = ["1m", "5m", "15m", "30m", "1h"]
         results = {}
-        tasks = []
-        
-        for tf in timeframes:
-            task = asyncio.create_task(
-                self.get_historical_candles(timeframe=tf, limit=500)
-            )
-            tasks.append((tf, task))
-        
-        for tf, task in tasks:
-            try:
-                results[tf] = await task
-            except Exception as e:
-                logger.error(f"Failed to fetch {tf}: {e}")
-                results[tf] = []
-        
+        tasks = [self.get_historical_candles(tf, 250) for tf in timeframes]
+        fetched = await asyncio.gather(*tasks, return_exceptions=True)
+        for tf, res in zip(timeframes, fetched):
+            results[tf] = res if isinstance(res, list) else []
         return results
-    
-    async def get_order_book(self, depth: int = 50) -> Dict[str, Any]:
-        """Get order book data"""
-        try:
-            data = await self._make_request(
-                "depth",
-                {"symbol": self.symbol, "limit": depth}
-            )
-            return data
-        except Exception as e:
-            logger.error(f"Failed to get order book: {e}")
-            raise
-    
-    async def get_recent_trades(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """Get recent trades"""
-        try:
-            data = await self._make_request(
-                "trades",
-                {"symbol": self.symbol, "limit": limit}
-            )
-            return data.get("data", [])
-        except Exception as e:
-            logger.error(f"Failed to get recent trades: {e}")
-            raise
 
 
 class DataCache:
-    """Cache for market data to reduce API calls"""
-    
     def __init__(self):
-        self.cache: Dict[str, Any] = {}
-        self.last_fetch: Dict[str, datetime] = {}
-        self.cache_ttl = timedelta(seconds=config.app.CACHE_TTL)
-        self.lock = asyncio.Lock()
-    
-    async def get_cached_candles(
-        self, 
-        timeframe: str, 
-        limit: int,
-        fetcher: BIQuoteClient
-    ) -> List[Candle]:
-        """Get candles from cache or fetch fresh"""
-        cache_key = f"candles_{timeframe}_{limit}"
-        
-        async with self.lock:
-            if cache_key in self.cache:
-                last_fetch = self.last_fetch.get(cache_key, datetime.min)
-                if datetime.utcnow() - last_fetch < self.cache_ttl:
-                    return self.cache[cache_key]
-            
-            # Fetch fresh data
-            candles = await fetcher.get_historical_candles(timeframe, limit)
-            self.cache[cache_key] = candles
-            self.last_fetch[cache_key] = datetime.utcnow()
-            return candles
-    
-    async def get_cached_price(self, fetcher: BIQuoteClient) -> MarketData:
-        """Get current price from cache or fetch fresh"""
-        cache_key = "current_price"
-        
-        async with self.lock:
-            if cache_key in self.cache:
-                last_fetch = self.last_fetch.get(cache_key, datetime.min)
-                if datetime.utcnow() - last_fetch < self.cache_ttl:
-                    return self.cache[cache_key]
-            
-            # Fetch fresh data
-            price = await fetcher.get_current_price()
-            self.cache[cache_key] = price
-            self.last_fetch[cache_key] = datetime.utcnow()
-            return price
-    
-    def clear_cache(self):
-        """Clear all cached data"""
-        self.cache.clear()
-        self.last_fetch.clear()
+        self._cache: Dict[str, Any] = {}
+        self._ts: Dict[str, datetime] = {}
+        self._ttl = timedelta(seconds=config.app.CACHE_TTL)
+        self._lock = asyncio.Lock()
 
-
-# Global instances
-biquote_client = BIQuoteClient()
-data_cache = DataCache()
-
-
-async def test_connection():
-    """Test API connection"""
-    try:
-        async with BIQuoteClient() as client:
+    async def get_price(self, client: BIQuoteClient) -> MarketData:
+        key = "price"
+        async with self._lock:
+            if key in self._cache and datetime.utcnow() - self._ts.get(key, datetime.min) < self._ttl:
+                return self._cache[key]
             price = await client.get_current_price()
-            print(f"✓ BIQUOTE API Connection OK")
-            print(f"  Current {price.symbol} Price: Bid={price.bid}, Ask={price.ask}")
-            return True
-    except Exception as e:
-        print(f"✗ BIQUOTE API Connection Failed: {e}")
-        return False
+            self._cache[key] = price
+            self._ts[key] = datetime.utcnow()
+            return price
+
+    async def get_candles(self, client: BIQuoteClient, tf: str, limit: int = 250) -> List[Candle]:
+        key = f"c_{tf}_{limit}"
+        async with self._lock:
+            if key in self._cache and datetime.utcnow() - self._ts.get(key, datetime.min) < self._ttl:
+                return self._cache[key]
+            candles = await client.get_historical_candles(tf, limit)
+            self._cache[key] = candles
+            self._ts[key] = datetime.utcnow()
+            return candles
+
+    def clear(self):
+        self._cache.clear()
+        self._ts.clear()
 
 
-if __name__ == "__main__":
-    async def main():
-        await test_connection()
-    
-    asyncio.run(main())
+data_cache = DataCache()
