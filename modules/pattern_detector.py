@@ -1,786 +1,271 @@
 """
-Pattern Detector Module - Advanced pattern recognition for XAUUSD
-Detects peaks, valleys, breakouts, and complex chart patterns
+Japanese Candlestick Pattern Detector
+Strong focus on classical Japanese patterns for smart entries
 """
 
-import numpy as np
 import logging
-from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, field
-from datetime import datetime
+from typing import List, Dict, Optional, Any, Tuple
 from enum import Enum
+from datetime import datetime
 
-from .data_fetcher import Candle
-from config.settings import config
+from modules.data_fetcher import Candle
 
 logger = logging.getLogger(__name__)
 
 
 class PatternType(Enum):
-    """Types of chart patterns"""
-    # Peaks and Valleys
-    PEAK = "PEAK"
-    VALLEY = "VALLEY"
-    HIGHER_HIGH = "HIGHER_HIGH"
-    LOWER_LOW = "LOWER_LOW"
-    DOUBLE_TOP = "DOUBLE_TOP"
-    DOUBLE_BOTTOM = "DOUBLE_BOTTOM"
-    TRIPLE_TOP = "TRIPLE_TOP"
-    TRIPLE_BOTTOM = "TRIPLE_BOTTOM"
-    
-    # Trend Patterns
-    ASCENDING_TRENDLINE = "ASCENDING_TRENDLINE"
-    DESCENDING_TRENDLINE = "DESCENDING_TRENDLINE"
-    TRENDLINE_BREAK = "TRENDLINE_BREAK"
-    
-    # Continuation Patterns
-    FLAG = "FLAG"
-    PENNANT = "PENNANT"
-    WEDGE_ASCENDING = "WEDGE_ASCENDING"
-    WEDGE_DESCENDING = "WEDGE_DESCENDING"
-    RECTANGLE = "RECTANGLE"
-    
-    # Reversal Patterns
-    HEAD_AND_SHOULDERS = "HEAD_AND_SHOULDERS"
-    INVERSE_HEAD_AND_SHOULDERS = "INVERSE_HEAD_AND_SHOULDERS"
-    
-    # Breakout Patterns
-    BREAKOUT_UP = "BREAKOUT_UP"
-    BREAKOUT_DOWN = "BREAKOUT_DOWN"
-    FALSE_BREAKOUT = "FALSE_BREAKOUT"
-    
-    # Volume Patterns
-    VOLUME_SPIKE = "VOLUME_SPIKE"
-    VOLUME_DROPOFF = "VOLUME_DROPOFF"
-    VOLUME_DIVERGENCE = "VOLUME_DIVERGENCE"
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
+    NEUTRAL = "NEUTRAL"
+    REVERSAL = "REVERSAL"
+    CONTINUATION = "CONTINUATION"
 
 
 @dataclass
-class Pattern:
-    """Represents a detected pattern"""
-    pattern_type: PatternType
+class CandlestickPattern:
     name: str
-    start_index: int
-    end_index: int
-    start_time: datetime
-    end_time: datetime
-    price_level: float
-    strength: float  # 0-1
-    confidence: float  # 0-1
-    confirmed: bool
-    description: str
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "type": self.pattern_type.value,
-            "name": self.name,
-            "start_index": self.start_index,
-            "end_index": self.end_index,
-            "start_time": self.start_time.isoformat(),
-            "end_time": self.end_time.isoformat(),
-            "price_level": self.price_level,
-            "strength": self.strength,
-            "confidence": self.confidence,
-            "confirmed": self.confirmed,
-            "description": self.description
-        }
-
-
-@dataclass
-class PeakValley:
-    """Represents a peak or valley"""
-    index: int
-    timestamp: datetime
-    price: float
-    pattern_type: PatternType  # PEAK or VALLEY
+    name_ar: str
+    pattern_type: PatternType
+    direction: str
     strength: float
-    confirmed: bool
-    
+    confidence: float
+    candles_used: int
+    description: str
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "index": self.index,
-            "timestamp": self.timestamp.isoformat(),
-            "price": self.price,
+            "name": self.name,
+            "name_ar": self.name_ar,
             "type": self.pattern_type.value,
-            "strength": self.strength,
-            "confirmed": self.confirmed
+            "direction": self.direction,
+            "strength": round(self.strength, 3),
+            "confidence": round(self.confidence, 3),
+            "candles_used": self.candles_used,
+            "description": self.description,
+            "timestamp": self.timestamp.isoformat()
         }
 
 
 class PatternDetector:
-    """Advanced Pattern Detector for XAUUSD"""
-    
+    """Detects 30+ classical Japanese candlestick patterns"""
+
     def __init__(self):
-        self.peak_threshold = 0.005  # 0.5% price change
-        self.valley_threshold = 0.005
-        self.min_peak_distance = 5  # Minimum candles between peaks
-        
-    def _find_peaks_and_valleys(
-        self, 
-        candles: List[Candle], 
-        lookback: int = 100
-    ) -> Tuple[List[PeakValley], List[PeakValley]]:
-        """Find peaks and valleys using local maxima/minima detection"""
-        if len(candles) < lookback:
-            return [], []
-        
-        prices = [c.close for c in candles]
-        peaks = []
-        valleys = []
-        
-        # Find local maxima (peaks)
-        for i in range(2, len(prices) - 2):
-            window = prices[i-2:i+3]
-            if prices[i] == max(window):
-                # Check if it's a significant peak
-                left_diff = (prices[i] - prices[i-2]) / prices[i-2] if prices[i-2] > 0 else 0
-                right_diff = (prices[i] - prices[i+2]) / prices[i+2] if prices[i+2] > 0 else 0
-                
-                if left_diff >= self.peak_threshold and right_diff >= self.peak_threshold:
-                    strength = min((left_diff + right_diff) / 0.02, 1.0)  # Normalize
-                    peaks.append(PeakValley(
-                        index=i,
-                        timestamp=candles[i].timestamp,
-                        price=prices[i],
-                        pattern_type=PatternType.PEAK,
-                        strength=strength,
-                        confirmed=False
-                    ))
-        
-        # Find local minima (valleys)
-        for i in range(2, len(prices) - 2):
-            window = prices[i-2:i+3]
-            if prices[i] == min(window):
-                # Check if it's a significant valley
-                left_diff = (prices[i-2] - prices[i]) / prices[i-2] if prices[i-2] > 0 else 0
-                right_diff = (prices[i+2] - prices[i]) / prices[i+2] if prices[i+2] > 0 else 0
-                
-                if left_diff >= self.valley_threshold and right_diff >= self.valley_threshold:
-                    strength = min((left_diff + right_diff) / 0.02, 1.0)
-                    valleys.append(PeakValley(
-                        index=i,
-                        timestamp=candles[i].timestamp,
-                        price=prices[i],
-                        pattern_type=PatternType.VALLEY,
-                        strength=strength,
-                        confirmed=False
-                    ))
-        
-        # Filter peaks and valleys that are too close
-        peaks = self._filter_close_patterns(peaks)
-        valleys = self._filter_close_patterns(valleys)
-        
-        return peaks, valleys
-    
-    def _filter_close_patterns(self, patterns: List[PeakValley]) -> List[PeakValley]:
-        """Filter patterns that are too close to each other"""
-        if not patterns:
-            return []
-        
-        filtered = [patterns[0]]
-        for i in range(1, len(patterns)):
-            if patterns[i].index - filtered[-1].index >= self.min_peak_distance:
-                filtered.append(patterns[i])
-            elif patterns[i].strength > filtered[-1].strength:
-                # Replace with stronger pattern
-                filtered[-1] = patterns[i]
-        
-        return filtered
-    
-    def _detect_double_top_bottom(
-        self, 
-        peaks: List[PeakValley], 
-        valleys: List[PeakValley]
-    ) -> List[Pattern]:
-        """Detect double top and double bottom patterns"""
-        patterns = []
-        
-        # Double Top detection
-        for i in range(len(peaks) - 1):
-            p1, p2 = peaks[i], peaks[i+1]
-            
-            # Check if prices are close (within 0.5%)
-            price_diff = abs(p1.price - p2.price) / p1.price
-            
-            # Check if there's a valley between them
-            valley_between = any(
-                p1.index < v.index < p2.index 
-                for v in valleys
-            )
-            
-            if price_diff <= 0.005 and valley_between:
-                # Calculate neckline (lowest point between peaks)
-                neckline_price = min(
-                    c.low for c in [peaks[i].candle, peaks[i+1].candle]
-                    if hasattr(peaks[i], 'candle')
-                )
-                
-                strength = min((p1.strength + p2.strength) / 2, 1.0)
-                confidence = 0.7 + (0.3 if abs(p1.price - p2.price) / p1.price < 0.002 else 0)
-                
-                patterns.append(Pattern(
-                    pattern_type=PatternType.DOUBLE_TOP,
-                    name="Double Top",
-                    start_index=peaks[i].index,
-                    end_index=peaks[i+1].index,
-                    start_time=peaks[i].timestamp,
-                    end_time=peaks[i+1].timestamp,
-                    price_level=neckline_price,
-                    strength=strength,
-                    confidence=confidence,
-                    confirmed=False,
-                    description=f"Double top at {p1.price:.2f} and {p2.price:.2f}"
-                ))
-        
-        # Double Bottom detection
-        for i in range(len(valleys) - 1):
-            v1, v2 = valleys[i], valleys[i+1]
-            
-            price_diff = abs(v1.price - v2.price) / v1.price
-            
-            peak_between = any(
-                v1.index < p.index < v2.index 
-                for p in peaks
-            )
-            
-            if price_diff <= 0.005 and peak_between:
-                neckline_price = max(
-                    c.high for c in [valleys[i].candle, valleys[i+1].candle]
-                    if hasattr(valleys[i], 'candle')
-                )
-                
-                strength = min((v1.strength + v2.strength) / 2, 1.0)
-                confidence = 0.7 + (0.3 if abs(v1.price - v2.price) / v1.price < 0.002 else 0)
-                
-                patterns.append(Pattern(
-                    pattern_type=PatternType.DOUBLE_BOTTOM,
-                    name="Double Bottom",
-                    start_index=valleys[i].index,
-                    end_index=valleys[i+1].index,
-                    start_time=valleys[i].timestamp,
-                    end_time=valleys[i+1].timestamp,
-                    price_level=neckline_price,
-                    strength=strength,
-                    confidence=confidence,
-                    confirmed=False,
-                    description=f"Double bottom at {v1.price:.2f} and {v2.price:.2f}"
-                ))
-        
-        return patterns
-    
-    def _detect_triple_top_bottom(
-        self, 
-        peaks: List[PeakValley], 
-        valleys: List[PeakValley]
-    ) -> List[Pattern]:
-        """Detect triple top and triple bottom patterns"""
-        patterns = []
-        
-        # Triple Top detection
-        for i in range(len(peaks) - 2):
-            p1, p2, p3 = peaks[i], peaks[i+1], peaks[i+2]
-            
-            avg_price = (p1.price + p2.price + p3.price) / 3
-            price_diffs = [abs(p.price - avg_price) / avg_price for p in [p1, p2, p3]]
-            
-            # Check if all prices are close (within 0.5%)
-            if all(diff <= 0.005 for diff in price_diffs):
-                # Check for valleys between peaks
-                valley_count = sum(
-                    1 for v in valleys if p1.index < v.index < p3.index
-                )
-                
-                if valley_count >= 2:
-                    neckline_price = min(c.low for c in [p1, p2, p3] if hasattr(p, 'candle'))
-                    
-                    strength = min(sum(p.strength for p in [p1, p2, p3]) / 3, 1.0)
-                    confidence = 0.6 + (0.4 if max(price_diffs) < 0.002 else 0)
-                    
-                    patterns.append(Pattern(
-                        pattern_type=PatternType.TRIPLE_TOP,
-                        name="Triple Top",
-                        start_index=p1.index,
-                        end_index=p3.index,
-                        start_time=p1.timestamp,
-                        end_time=p3.timestamp,
-                        price_level=neckline_price,
-                        strength=strength,
-                        confidence=confidence,
-                        confirmed=False,
-                        description=f"Triple top at {avg_price:.2f}"
-                    ))
-        
-        # Triple Bottom detection
-        for i in range(len(valleys) - 2):
-            v1, v2, v3 = valleys[i], valleys[i+1], valleys[i+2]
-            
-            avg_price = (v1.price + v2.price + v3.price) / 3
-            price_diffs = [abs(v.price - avg_price) / avg_price for v in [v1, v2, v3]]
-            
-            if all(diff <= 0.005 for diff in price_diffs):
-                peak_count = sum(
-                    1 for p in peaks if v1.index < p.index < v3.index
-                )
-                
-                if peak_count >= 2:
-                    neckline_price = max(c.high for c in [v1, v2, v3] if hasattr(v, 'candle'))
-                    
-                    strength = min(sum(v.strength for v in [v1, v2, v3]) / 3, 1.0)
-                    confidence = 0.6 + (0.4 if max(price_diffs) < 0.002 else 0)
-                    
-                    patterns.append(Pattern(
-                        pattern_type=PatternType.TRIPLE_BOTTOM,
-                        name="Triple Bottom",
-                        start_index=v1.index,
-                        end_index=v3.index,
-                        start_time=v1.timestamp,
-                        end_time=v3.timestamp,
-                        price_level=neckline_price,
-                        strength=strength,
-                        confidence=confidence,
-                        confirmed=False,
-                        description=f"Triple bottom at {avg_price:.2f}"
-                    ))
-        
-        return patterns
-    
-    def _detect_trendlines(
-        self, 
-        candles: List[Candle], 
-        peaks: List[PeakValley], 
-        valleys: List[PeakValley]
-    ) -> List[Pattern]:
-        """Detect trendlines and breakouts"""
-        patterns = []
-        
-        if len(peaks) >= 2:
-            # Check for descending trendline (connecting peaks)
-            p1, p2 = peaks[-2], peaks[-1]
-            
-            if p2.index > p1.index and p2.price < p1.price:
-                # Check if current price is below trendline
-                current_price = candles[-1].close
-                trendline_price = self._calculate_trendline_price(
-                    p1.index, p1.price, p2.index, p2.price, len(candles) - 1
-                )
-                
-                if current_price < trendline_price:
-                    # Trendline break down
-                    strength = min((p1.price - p2.price) / p1.price * 10, 1.0)
-                    patterns.append(Pattern(
-                        pattern_type=PatternType.TRENDLINE_BREAK,
-                        name="Descending Trendline Break",
-                        start_index=p1.index,
-                        end_index=p2.index,
-                        start_time=p1.timestamp,
-                        end_time=p2.timestamp,
-                        price_level=trendline_price,
-                        strength=strength,
-                        confidence=0.8,
-                        confirmed=True,
-                        description=f"Price broke below descending trendline at {trendline_price:.2f}"
-                    ))
-        
-        if len(valleys) >= 2:
-            # Check for ascending trendline (connecting valleys)
-            v1, v2 = valleys[-2], valleys[-1]
-            
-            if v2.index > v1.index and v2.price > v1.price:
-                current_price = candles[-1].close
-                trendline_price = self._calculate_trendline_price(
-                    v1.index, v1.price, v2.index, v2.price, len(candles) - 1
-                )
-                
-                if current_price > trendline_price:
-                    # Trendline break up
-                    strength = min((v2.price - v1.price) / v1.price * 10, 1.0)
-                    patterns.append(Pattern(
-                        pattern_type=PatternType.TRENDLINE_BREAK,
-                        name="Ascending Trendline Break",
-                        start_index=v1.index,
-                        end_index=v2.index,
-                        start_time=v1.timestamp,
-                        end_time=v2.timestamp,
-                        price_level=trendline_price,
-                        strength=strength,
-                        confidence=0.8,
-                        confirmed=True,
-                        description=f"Price broke above ascending trendline at {trendline_price:.2f}"
-                    ))
-        
-        return patterns
-    
-    def _calculate_trendline_price(
-        self, 
-        x1: int, y1: float, 
-        x2: int, y2: float, 
-        x: int
-    ) -> float:
-        """Calculate trendline price at position x"""
-        if x2 == x1:
-            return y1
-        
-        slope = (y2 - y1) / (x2 - x1)
-        return y1 + slope * (x - x1)
-    
-    def _detect_head_and_shoulders(
-        self, 
-        candles: List[Candle], 
-        peaks: List[PeakValley], 
-        valleys: List[PeakValley]
-    ) -> List[Pattern]:
-        """Detect Head and Shoulders and Inverse Head and Shoulders patterns"""
-        patterns = []
-        
-        if len(peaks) < 3:
-            return patterns
-        
-        # Head and Shoulders (bearish reversal)
-        for i in range(1, len(peaks) - 1):
-            left_shoulder = peaks[i-1]
-            head = peaks[i]
-            right_shoulder = peaks[i+1]
-            
-            # Check if head is higher than shoulders
-            if (head.price > left_shoulder.price * 1.01 and 
-                head.price > right_shoulder.price * 1.01):
-                
-                # Check if shoulders are at similar level
-                shoulder_diff = abs(left_shoulder.price - right_shoulder.price) / left_shoulder.price
-                
-                if shoulder_diff <= 0.01:  # 1% difference
-                    # Find neckline (lowest valley between left shoulder and head)
-                    neckline_valley = None
-                    for v in valleys:
-                        if left_shoulder.index < v.index < head.index:
-                            neckline_valley = v
-                            break
-                    
-                    if neckline_valley:
-                        neckline_price = neckline_valley.price
-                        
-                        # Check if price broke below neckline
-                        current_price = candles[-1].close
-                        
-                        strength = min((head.price - left_shoulder.price) / left_shoulder.price * 5, 1.0)
-                        confidence = 0.7 + (0.3 if shoulder_diff < 0.005 else 0)
-                        
-                        patterns.append(Pattern(
-                            pattern_type=PatternType.HEAD_AND_SHOULDERS,
-                            name="Head and Shoulders",
-                            start_index=left_shoulder.index,
-                            end_index=right_shoulder.index,
-                            start_time=left_shoulder.timestamp,
-                            end_time=right_shoulder.timestamp,
-                            price_level=neckline_price,
-                            strength=strength,
-                            confidence=confidence,
-                            confirmed=current_price < neckline_price,
-                            description=f"Head and Shoulders with neckline at {neckline_price:.2f}"
-                        ))
-        
-        # Inverse Head and Shoulders (bullish reversal)
-        if len(valleys) < 3:
-            return patterns
-        
-        for i in range(1, len(valleys) - 1):
-            left_shoulder = valleys[i-1]
-            head = valleys[i]
-            right_shoulder = valleys[i+1]
-            
-            if (head.price < left_shoulder.price * 0.99 and 
-                head.price < right_shoulder.price * 0.99):
-                
-                shoulder_diff = abs(left_shoulder.price - right_shoulder.price) / left_shoulder.price
-                
-                if shoulder_diff <= 0.01:
-                    # Find neckline (highest peak between left shoulder and head)
-                    neckline_peak = None
-                    for p in peaks:
-                        if left_shoulder.index < p.index < head.index:
-                            neckline_peak = p
-                            break
-                    
-                    if neckline_peak:
-                        neckline_price = neckline_peak.price
-                        current_price = candles[-1].close
-                        
-                        strength = min((left_shoulder.price - head.price) / left_shoulder.price * 5, 1.0)
-                        confidence = 0.7 + (0.3 if shoulder_diff < 0.005 else 0)
-                        
-                        patterns.append(Pattern(
-                            pattern_type=PatternType.INVERSE_HEAD_AND_SHOULDERS,
-                            name="Inverse Head and Shoulders",
-                            start_index=left_shoulder.index,
-                            end_index=right_shoulder.index,
-                            start_time=left_shoulder.timestamp,
-                            end_time=right_shoulder.timestamp,
-                            price_level=neckline_price,
-                            strength=strength,
-                            confidence=confidence,
-                            confirmed=current_price > neckline_price,
-                            description=f"Inverse H&S with neckline at {neckline_price:.2f}"
-                        ))
-        
-        return patterns
-    
-    def _detect_breakouts(
-        self, 
-        candles: List[Candle], 
-        support_levels: List[float], 
-        resistance_levels: List[float]
-    ) -> List[Pattern]:
-        """Detect breakouts from support/resistance"""
-        patterns = []
-        
-        if len(candles) < 2:
-            return patterns
-        
-        current_price = candles[-1].close
-        prev_price = candles[-2].close
-        
-        # Check for breakout up
-        for level in resistance_levels:
-            if prev_price <= level and current_price > level:
-                strength = min((current_price - level) / level * 10, 1.0)
-                patterns.append(Pattern(
-                    pattern_type=PatternType.BREAKOUT_UP,
-                    name="Breakout Up",
-                    start_index=len(candles) - 2,
-                    end_index=len(candles) - 1,
-                    start_time=candles[-2].timestamp,
-                    end_time=candles[-1].timestamp,
-                    price_level=level,
-                    strength=strength,
-                    confidence=0.8,
-                    confirmed=True,
-                    description=f"Broke above resistance at {level:.2f}"
-                ))
-        
-        # Check for breakout down
-        for level in support_levels:
-            if prev_price >= level and current_price < level:
-                strength = min((level - current_price) / level * 10, 1.0)
-                patterns.append(Pattern(
-                    pattern_type=PatternType.BREAKOUT_DOWN,
-                    name="Breakout Down",
-                    start_index=len(candles) - 2,
-                    end_index=len(candles) - 1,
-                    start_time=candles[-2].timestamp,
-                    end_time=candles[-1].timestamp,
-                    price_level=level,
-                    strength=strength,
-                    confidence=0.8,
-                    confirmed=True,
-                    description=f"Broke below support at {level:.2f}"
-                ))
-        
-        return patterns
-    
-    def _detect_volume_patterns(
-        self, 
-        candles: List[Candle]
-    ) -> List[Pattern]:
-        """Detect volume-based patterns"""
-        patterns = []
-        
-        if len(candles) < 20:
-            return patterns
-        
-        volumes = [c.volume for c in candles]
-        prices = [c.close for c in candles]
-        
-        avg_volume_20 = sum(volumes[-20:]) / 20
-        current_volume = volumes[-1]
-        
-        # Volume spike
-        if current_volume > avg_volume_20 * config.technical.VOLUME_SPIKE_THRESHOLD:
-            strength = min(current_volume / avg_volume_20 / 2, 1.0)
-            patterns.append(Pattern(
-                pattern_type=PatternType.VOLUME_SPIKE,
-                name="Volume Spike",
-                start_index=len(candles) - 1,
-                end_index=len(candles) - 1,
-                start_time=candles[-1].timestamp,
-                end_time=candles[-1].timestamp,
-                price_level=prices[-1],
-                strength=strength,
-                confidence=0.9,
-                confirmed=True,
-                description=f"Volume spike: {current_volume:.0f} vs avg {avg_volume_20:.0f}"
-            ))
-        
-        # Volume dropoff
-        if current_volume < avg_volume_20 * 0.5:
-            patterns.append(Pattern(
-                pattern_type=PatternType.VOLUME_DROPOFF,
-                name="Volume Dropoff",
-                start_index=len(candles) - 1,
-                end_index=len(candles) - 1,
-                start_time=candles[-1].timestamp,
-                end_time=candles[-1].timestamp,
-                price_level=prices[-1],
-                strength=min((avg_volume_20 - current_volume) / avg_volume_20, 1.0),
-                confidence=0.7,
-                confirmed=True,
-                description=f"Volume dropoff: {current_volume:.0f} vs avg {avg_volume_20:.0f}"
-            ))
-        
-        return patterns
-    
-    def _identify_higher_highs_lower_lows(
-        self, 
-        peaks: List[PeakValley], 
-        valleys: List[PeakValley]
-    ) -> List[Pattern]:
-        """Identify higher highs and lower lows for trend confirmation"""
-        patterns = []
-        
-        # Higher Highs
-        for i in range(1, len(peaks)):
-            if peaks[i].price > peaks[i-1].price * 1.005:  # 0.5% higher
-                patterns.append(Pattern(
-                    pattern_type=PatternType.HIGHER_HIGH,
-                    name="Higher High",
-                    start_index=peaks[i-1].index,
-                    end_index=peaks[i].index,
-                    start_time=peaks[i-1].timestamp,
-                    end_time=peaks[i].timestamp,
-                    price_level=peaks[i].price,
-                    strength=min((peaks[i].price - peaks[i-1].price) / peaks[i-1].price * 10, 1.0),
-                    confidence=0.8,
-                    confirmed=True,
-                    description=f"Higher high: {peaks[i-1].price:.2f} -> {peaks[i].price:.2f}"
-                ))
-        
-        # Lower Lows
-        for i in range(1, len(valleys)):
-            if valleys[i].price < valleys[i-1].price * 0.995:  # 0.5% lower
-                patterns.append(Pattern(
-                    pattern_type=PatternType.LOWER_LOW,
-                    name="Lower Low",
-                    start_index=valleys[i-1].index,
-                    end_index=valleys[i].index,
-                    start_time=valleys[i-1].timestamp,
-                    end_time=valleys[i].timestamp,
-                    price_level=valleys[i].price,
-                    strength=min((valleys[i-1].price - valleys[i].price) / valleys[i-1].price * 10, 1.0),
-                    confidence=0.8,
-                    confirmed=True,
-                    description=f"Lower low: {valleys[i-1].price:.2f} -> {valleys[i].price:.2f}"
-                ))
-        
-        return patterns
-    
-    def detect_all_patterns(
-        self, 
-        candles: List[Candle], 
-        support_levels: List[float] = None,
-        resistance_levels: List[float] = None
-    ) -> Dict[PatternType, List[Pattern]]:
-        """Detect all patterns in the candle data"""
+        self.min_body_ratio = 0.05
+
+    def _avg_body(self, candles: List[Candle], n: int = 10) -> float:
         if not candles:
-            return {}
-        
-        # Initialize result dictionary
-        all_patterns: Dict[PatternType, List[Pattern]] = {p: [] for p in PatternType}
-        
-        # Find peaks and valleys
-        peaks, valleys = self._find_peaks_and_valleys(candles)
-        
-        # Detect patterns
-        double_patterns = self._detect_double_top_bottom(peaks, valleys)
-        for p in double_patterns:
-            all_patterns[p.pattern_type].append(p)
-        
-        triple_patterns = self._detect_triple_top_bottom(peaks, valleys)
-        for p in triple_patterns:
-            all_patterns[p.pattern_type].append(p)
-        
-        trendline_patterns = self._detect_trendlines(candles, peaks, valleys)
-        for p in trendline_patterns:
-            all_patterns[p.pattern_type].append(p)
-        
-        hs_patterns = self._detect_head_and_shoulders(candles, peaks, valleys)
-        for p in hs_patterns:
-            all_patterns[p.pattern_type].append(p)
-        
-        # Breakout detection
-        if support_levels is None:
-            support_levels = []
-        if resistance_levels is None:
-            resistance_levels = []
-        
-        breakout_patterns = self._detect_breakouts(candles, support_levels, resistance_levels)
-        for p in breakout_patterns:
-            all_patterns[p.pattern_type].append(p)
-        
-        # Volume patterns
-        volume_patterns = self._detect_volume_patterns(candles)
-        for p in volume_patterns:
-            all_patterns[p.pattern_type].append(p)
-        
-        # Higher highs and lower lows
-        hhll_patterns = self._identify_higher_highs_lower_lows(peaks, valleys)
-        for p in hhll_patterns:
-            all_patterns[p.pattern_type].append(p)
-        
-        # Add peaks and valleys
-        for p in peaks:
-            all_patterns[PatternType.PEAK].append(p)
-        for v in valleys:
-            all_patterns[PatternType.VALLEY].append(v)
-        
-        # Sort patterns by strength
-        for pattern_type in all_patterns:
-            all_patterns[pattern_type].sort(key=lambda x: x.strength, reverse=True)
-        
-        return all_patterns
-    
-    def get_recent_patterns(
-        self, 
-        candles: List[Candle], 
-        lookback_candles: int = 50
-    ) -> List[Pattern]:
-        """Get patterns from recent candles only"""
-        if len(candles) > lookback_candles:
-            recent_candles = candles[-lookback_candles:]
+            return 1.0
+        bodies = [c.body for c in candles[-n:] if c.body > 0]
+        return sum(bodies) / len(bodies) if bodies else 1.0
+
+    def _is_doji(self, c: Candle, avg_body: float) -> bool:
+        return c.body <= avg_body * 0.12 and c.range > 0
+
+    def _is_long(self, c: Candle, avg_body: float) -> bool:
+        return c.body >= avg_body * 1.4
+
+    def _is_short(self, c: Candle, avg_body: float) -> bool:
+        return c.body <= avg_body * 0.6
+
+    def _detect_doji(self, c: Candle, avg: float) -> Optional[CandlestickPattern]:
+        if not self._is_doji(c, avg):
+            return None
+        strength = 0.55
+        if c.upper_wick > c.body * 2 and c.lower_wick > c.body * 2:
+            name, name_ar = "Long-Legged Doji", "\u062f\u0648\u062c\u064a \u0637\u0648\u064a\u0644 \u0627\u0644\u0623\u0631\u062c\u0644"
+            strength = 0.70
+        elif c.upper_wick > c.body * 3 and c.lower_wick < c.body:
+            name, name_ar = "Gravestone Doji", "\u062f\u0648\u062c\u064a \u0634\u0627\u0647\u062f \u0627\u0644\u0642\u0628\u0631"
+            return CandlestickPattern(name, name_ar, PatternType.BEARISH, "SELL", 0.72, 0.68, 1,
+                                      "\u0625\u0634\u0627\u0631\u0629 \u0627\u0646\u0639\u0643\u0627\u0633 \u0647\u0628\u0648\u0637\u064a\u0629 \u0642\u0648\u064a\u0629 \u0639\u0646\u062f \u0627\u0644\u0642\u0645\u0629")
+        elif c.lower_wick > c.body * 3 and c.upper_wick < c.body:
+            name, name_ar = "Dragonfly Doji", "\u062f\u0648\u062c\u064a \u0627\u0644\u064a\u0639\u0633\u0648\u0628"
+            return CandlestickPattern(name, name_ar, PatternType.BULLISH, "BUY", 0.72, 0.68, 1,
+                                      "\u0625\u0634\u0627\u0631\u0629 \u0627\u0646\u0639\u0643\u0627\u0633 \u0635\u0639\u0648\u062f\u064a\u0629 \u0642\u0648\u064a\u0629 \u0639\u0646\u062f \u0627\u0644\u0642\u0627\u0639")
         else:
-            recent_candles = candles
-        
-        all_patterns = self.detect_all_patterns(recent_candles)
-        
-        # Flatten all patterns and sort by end index (most recent first)
-        recent = []
-        for pattern_list in all_patterns.values():
-            recent.extend(pattern_list)
-        
-        recent.sort(key=lambda x: x.end_index, reverse=True)
-        
-        return recent[:20]  # Return top 20 most recent patterns
+            name, name_ar = "Doji", "\u062f\u0648\u062c\u064a"
+        return CandlestickPattern(name, name_ar, PatternType.NEUTRAL, "NEUTRAL", strength, 0.60, 1,
+                                  "\u062a\u0631\u062f\u062f \u0627\u0644\u0633\u0648\u0642 - \u0627\u062d\u062a\u0645\u0627\u0644 \u0627\u0646\u0639\u0643\u0627\u0633")
+
+    def _detect_hammer(self, c: Candle, avg: float, prev: Optional[Candle]) -> Optional[CandlestickPattern]:
+        if c.range == 0:
+            return None
+        body_ratio = c.body / c.range
+        lower_ratio = c.lower_wick / c.range
+        upper_ratio = c.upper_wick / c.range
+        if lower_ratio >= 0.55 and upper_ratio <= 0.15 and body_ratio <= 0.35:
+            if prev and prev.is_bearish:
+                return CandlestickPattern("Hammer", "\u0627\u0644\u0645\u0637\u0631\u0642\u0629", PatternType.BULLISH, "BUY", 0.78, 0.75, 1,
+                                          "\u0646\u0645\u0637 \u0627\u0646\u0639\u0643\u0627\u0633 \u0635\u0639\u0648\u062f\u064a \u0643\u0644\u0627\u0633\u064a\u0643\u064a \u0628\u0639\u062f \u0647\u0628\u0648\u0637")
+            return CandlestickPattern("Hanging Man", "\u0627\u0644\u0631\u062c\u0644 \u0627\u0644\u0645\u0639\u0644\u0642", PatternType.BEARISH, "SELL", 0.70, 0.65, 1,
+                                      "\u062a\u062d\u0630\u064a\u0631 \u0627\u0646\u0639\u0643\u0627\u0633 \u0647\u0628\u0648\u0637\u064a \u0645\u062d\u062a\u0645\u0644")
+        if upper_ratio >= 0.55 and lower_ratio <= 0.15 and body_ratio <= 0.35:
+            if prev and prev.is_bullish:
+                return CandlestickPattern("Shooting Star", "\u0627\u0644\u0646\u062c\u0645 \u0627\u0644\u0633\u0627\u0642\u0637", PatternType.BEARISH, "SELL", 0.80, 0.76, 1,
+                                          "\u0646\u0645\u0637 \u0627\u0646\u0639\u0643\u0627\u0633 \u0647\u0628\u0648\u0637\u064a \u0642\u0648\u064a \u0628\u0639\u062f \u0635\u0639\u0648\u062f")
+            return CandlestickPattern("Inverted Hammer", "\u0627\u0644\u0645\u0637\u0631\u0642\u0629 \u0627\u0644\u0645\u0642\u0644\u0648\u0628\u0629", PatternType.BULLISH, "BUY", 0.72, 0.68, 1,
+                                      "\u0625\u0634\u0627\u0631\u0629 \u0627\u0646\u0639\u0643\u0627\u0633 \u0635\u0639\u0648\u062f\u064a \u0645\u062d\u062a\u0645\u0644\u0629")
+        return None
+
+    def _detect_marubozu(self, c: Candle, avg: float) -> Optional[CandlestickPattern]:
+        if c.range == 0:
+            return None
+        if c.upper_wick / c.range < 0.05 and c.lower_wick / c.range < 0.05 and c.body > avg * 1.2:
+            if c.is_bullish:
+                return CandlestickPattern("Bullish Marubozu", "\u0645\u0627\u0631\u0648\u0628\u0648\u0632\u0648 \u0635\u0627\u0639\u062f", PatternType.BULLISH, "BUY", 0.82, 0.78, 1,
+                                          "\u0642\u0648\u0629 \u0634\u0631\u0627\u0626\u064a\u0629 \u0643\u0627\u0645\u0644\u0629 \u0628\u062f\u0648\u0646 \u0638\u0644\u0627\u0644")
+            return CandlestickPattern("Bearish Marubozu", "\u0645\u0627\u0631\u0648\u0628\u0648\u0632\u0648 \u0647\u0627\u0628\u0637", PatternType.BEARISH, "SELL", 0.82, 0.78, 1,
+                                      "\u0642\u0648\u0629 \u0628\u064a\u0639\u064a\u0629 \u0643\u0627\u0645\u0644\u0629 \u0628\u062f\u0648\u0646 \u0638\u0644\u0627\u0644")
+        return None
+
+    def _detect_spinning_top(self, c: Candle, avg: float) -> Optional[CandlestickPattern]:
+        if c.range == 0:
+            return None
+        if 0.15 < c.body / c.range < 0.35 and c.upper_wick > c.body * 0.8 and c.lower_wick > c.body * 0.8:
+            return CandlestickPattern("Spinning Top", "\u0627\u0644\u0642\u0645\u0629 \u0627\u0644\u062f\u0648\u0627\u0631\u0629", PatternType.NEUTRAL, "NEUTRAL", 0.50, 0.55, 1,
+                                      "\u062a\u0631\u062f\u062f \u0648\u062a\u0648\u0627\u0632\u0646 \u0628\u064a\u0646 \u0627\u0644\u0645\u0634\u062a\u0631\u064a\u0646 \u0648\u0627\u0644\u0628\u0627\u0626\u0639\u064a\u0646")
+        return None
+
+    def _detect_engulfing(self, prev: Candle, curr: Candle, avg: float) -> Optional[CandlestickPattern]:
+        if prev.body == 0 or curr.body == 0:
+            return None
+        if prev.is_bearish and curr.is_bullish and curr.open <= prev.close and curr.close >= prev.open and curr.body > prev.body * 1.05:
+            strength = min(0.92, 0.70 + (curr.body / prev.body - 1) * 0.15)
+            return CandlestickPattern("Bullish Engulfing", "\u0627\u0644\u0627\u0628\u062a\u0644\u0627\u0639 \u0627\u0644\u0635\u0627\u0639\u062f", PatternType.BULLISH, "BUY", strength, 0.80, 2,
+                                      "\u0623\u0642\u0648\u0649 \u0623\u0646\u0645\u0627\u0637 \u0627\u0644\u0627\u0646\u0639\u0643\u0627\u0633 \u0627\u0644\u0635\u0639\u0648\u062f\u064a\u0629 - \u0627\u0628\u062a\u0644\u0627\u0639 \u0643\u0627\u0645\u0644")
+        if prev.is_bullish and curr.is_bearish and curr.open >= prev.close and curr.close <= prev.open and curr.body > prev.body * 1.05:
+            strength = min(0.92, 0.70 + (curr.body / prev.body - 1) * 0.15)
+            return CandlestickPattern("Bearish Engulfing", "\u0627\u0644\u0627\u0628\u062a\u0644\u0627\u0639 \u0627\u0644\u0647\u0627\u0628\u0637", PatternType.BEARISH, "SELL", strength, 0.80, 2,
+                                      "\u0623\u0642\u0648\u0649 \u0623\u0646\u0645\u0627\u0637 \u0627\u0644\u0627\u0646\u0639\u0643\u0627\u0633 \u0627\u0644\u0647\u0628\u0648\u0637\u064a\u0629 - \u0627\u0628\u062a\u0644\u0627\u0639 \u0643\u0627\u0645\u0644")
+        return None
+
+    def _detect_harami(self, prev: Candle, curr: Candle, avg: float) -> Optional[CandlestickPattern]:
+        if prev.body < avg * 0.8:
+            return None
+        if prev.is_bearish and curr.is_bullish and curr.open > prev.close and curr.close < prev.open and curr.body < prev.body * 0.6:
+            return CandlestickPattern("Bullish Harami", "\u0627\u0644\u062d\u0631\u0627\u0645\u064a \u0627\u0644\u0635\u0627\u0639\u062f", PatternType.BULLISH, "BUY", 0.68, 0.65, 2,
+                                      "\u0646\u0645\u0637 \u0627\u0646\u0639\u0643\u0627\u0633 \u0635\u0639\u0648\u062f\u064a - \u0627\u0644\u0634\u0645\u0639\u0629 \u0627\u0644\u0635\u063a\u064a\u0631\u0629 \u062f\u0627\u062e\u0644 \u0627\u0644\u0643\u0628\u064a\u0631\u0629")
+        if prev.is_bullish and curr.is_bearish and curr.open < prev.close and curr.close > prev.open and curr.body < prev.body * 0.6:
+            return CandlestickPattern("Bearish Harami", "\u0627\u0644\u062d\u0631\u0627\u0645\u064a \u0627\u0644\u0647\u0627\u0628\u0637", PatternType.BEARISH, "SELL", 0.68, 0.65, 2,
+                                      "\u0646\u0645\u0637 \u0627\u0646\u0639\u0643\u0627\u0633 \u0647\u0628\u0648\u0637\u064a - \u0627\u0644\u0634\u0645\u0639\u0629 \u0627\u0644\u0635\u063a\u064a\u0631\u0629 \u062f\u0627\u062e\u0644 \u0627\u0644\u0643\u0628\u064a\u0631\u0629")
+        return None
+
+    def _detect_piercing_darkcloud(self, prev: Candle, curr: Candle, avg: float) -> Optional[CandlestickPattern]:
+        mid_prev = (prev.open + prev.close) / 2
+        if prev.is_bearish and curr.is_bullish and curr.open < prev.low and curr.close > mid_prev and curr.close < prev.open:
+            return CandlestickPattern("Piercing Line", "\u062e\u0637 \u0627\u0644\u0627\u062e\u062a\u0631\u0627\u0642", PatternType.BULLISH, "BUY", 0.75, 0.72, 2,
+                                      "\u0627\u0646\u0639\u0643\u0627\u0633 \u0635\u0639\u0648\u062f\u064a \u0642\u0648\u064a - \u0627\u062e\u062a\u0631\u0627\u0642 \u0645\u0646\u062a\u0635\u0641 \u0627\u0644\u0634\u0645\u0639\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629")
+        if prev.is_bullish and curr.is_bearish and curr.open > prev.high and curr.close < mid_prev and curr.close > prev.open:
+            return CandlestickPattern("Dark Cloud Cover", "\u063a\u0637\u0627\u0621 \u0627\u0644\u0633\u062d\u0627\u0628\u0629 \u0627\u0644\u062f\u0627\u0643\u0646\u0629", PatternType.BEARISH, "SELL", 0.75, 0.72, 2,
+                                      "\u0627\u0646\u0639\u0643\u0627\u0633 \u0647\u0628\u0648\u0637\u064a \u0642\u0648\u064a - \u0627\u062e\u062a\u0631\u0627\u0642 \u0645\u0646\u062a\u0635\u0641 \u0627\u0644\u0634\u0645\u0639\u0629 \u0627\u0644\u0633\u0627\u0628\u0642\u0629")
+        return None
+
+    def _detect_tweezer(self, prev: Candle, curr: Candle) -> Optional[CandlestickPattern]:
+        tol = max(prev.range * 0.03, 0.15)
+        if abs(prev.low - curr.low) <= tol and prev.is_bearish and curr.is_bullish:
+            return CandlestickPattern("Tweezer Bottom", "\u0627\u0644\u0645\u0644\u0642\u0637 \u0627\u0644\u0633\u0641\u0644\u064a", PatternType.BULLISH, "BUY", 0.70, 0.67, 2,
+                                      "\u0642\u0627\u0639 \u0645\u0632\u062f\u0648\u062c - \u062f\u0639\u0645 \u0642\u0648\u064a")
+        if abs(prev.high - curr.high) <= tol and prev.is_bullish and curr.is_bearish:
+            return CandlestickPattern("Tweezer Top", "\u0627\u0644\u0645\u0644\u0642\u0637 \u0627\u0644\u0639\u0644\u0648\u064a", PatternType.BEARISH, "SELL", 0.70, 0.67, 2,
+                                      "\u0642\u0645\u0629 \u0645\u0632\u062f\u0648\u062c\u0629 - \u0645\u0642\u0627\u0648\u0645\u0629 \u0642\u0648\u064a\u0629")
+        return None
+
+    def _detect_morning_evening_star(self, c1: Candle, c2: Candle, c3: Candle, avg: float) -> Optional[CandlestickPattern]:
+        if (c1.is_bearish and self._is_long(c1, avg) and self._is_short(c2, avg) and
+            c3.is_bullish and c3.close > (c1.open + c1.close) / 2):
+            return CandlestickPattern("Morning Star", "\u0646\u062c\u0645\u0629 \u0627\u0644\u0635\u0628\u0627\u062d", PatternType.BULLISH, "BUY", 0.88, 0.85, 3,
+                                      "\u0623\u0642\u0648\u0649 \u0623\u0646\u0645\u0627\u0637 \u0627\u0644\u0627\u0646\u0639\u0643\u0627\u0633 \u0627\u0644\u0635\u0639\u0648\u062f\u064a\u0629 \u0627\u0644\u062b\u0644\u0627\u062b\u064a\u0629")
+        if (c1.is_bullish and self._is_long(c1, avg) and self._is_short(c2, avg) and
+            c3.is_bearish and c3.close < (c1.open + c1.close) / 2):
+            return CandlestickPattern("Evening Star", "\u0646\u062c\u0645\u0629 \u0627\u0644\u0645\u0633\u0627\u0621", PatternType.BEARISH, "SELL", 0.88, 0.85, 3,
+                                      "\u0623\u0642\u0648\u0649 \u0623\u0646\u0645\u0627\u0637 \u0627\u0644\u0627\u0646\u0639\u0643\u0627\u0633 \u0627\u0644\u0647\u0628\u0648\u0637\u064a\u0629 \u0627\u0644\u062b\u0644\u0627\u062b\u064a\u0629")
+        return None
+
+    def _detect_three_soldiers_crows(self, c1: Candle, c2: Candle, c3: Candle, avg: float) -> Optional[CandlestickPattern]:
+        if (c1.is_bullish and c2.is_bullish and c3.is_bullish and
+            c2.open > c1.open and c2.close > c1.close and
+            c3.open > c2.open and c3.close > c2.close and
+            c1.body > avg * 0.7 and c2.body > avg * 0.7 and c3.body > avg * 0.7):
+            return CandlestickPattern("Three White Soldiers", "\u0627\u0644\u062c\u0646\u0648\u062f \u0627\u0644\u0628\u064a\u0636 \u0627\u0644\u062b\u0644\u0627\u062b\u0629", PatternType.BULLISH, "BUY", 0.90, 0.87, 3,
+                                      "\u0632\u062e\u0645 \u0635\u0639\u0648\u062f\u064a \u0642\u0648\u064a \u062c\u062f\u0627\u064b \u0648\u0645\u0633\u062a\u0645\u0631")
+        if (c1.is_bearish and c2.is_bearish and c3.is_bearish and
+            c2.open < c1.open and c2.close < c1.close and
+            c3.open < c2.open and c3.close < c2.close and
+            c1.body > avg * 0.7 and c2.body > avg * 0.7 and c3.body > avg * 0.7):
+            return CandlestickPattern("Three Black Crows", "\u0627\u0644\u063a\u0631\u0628\u0627\u0646 \u0627\u0644\u0633\u0648\u062f \u0627\u0644\u062b\u0644\u0627\u062b\u0629", PatternType.BEARISH, "SELL", 0.90, 0.87, 3,
+                                      "\u0632\u062e\u0645 \u0647\u0628\u0648\u0637\u064a \u0642\u0648\u064a \u062c\u062f\u0627\u064b \u0648\u0645\u0633\u062a\u0645\u0631")
+        return None
+
+    def _detect_three_inside(self, c1: Candle, c2: Candle, c3: Candle) -> Optional[CandlestickPattern]:
+        if (c1.is_bearish and c2.is_bullish and c2.body < c1.body * 0.7 and
+            c2.open > c1.close and c2.close < c1.open and
+            c3.is_bullish and c3.close > c1.open):
+            return CandlestickPattern("Three Inside Up", "\u0627\u0644\u062f\u0627\u062e\u0644 \u0627\u0644\u062b\u0644\u0627\u062b\u0629 \u0627\u0644\u0635\u0627\u0639\u062f", PatternType.BULLISH, "BUY", 0.78, 0.74, 3,
+                                      "\u062a\u0623\u0643\u064a\u062f \u0627\u0646\u0639\u0643\u0627\u0633 \u0635\u0639\u0648\u062f\u064a \u0628\u0639\u062f \u062d\u0631\u0627\u0645\u064a")
+        if (c1.is_bullish and c2.is_bearish and c2.body < c1.body * 0.7 and
+            c2.open < c1.close and c2.close > c1.open and
+            c3.is_bearish and c3.close < c1.open):
+            return CandlestickPattern("Three Inside Down", "\u0627\u0644\u062f\u0627\u062e\u0644 \u0627\u0644\u062b\u0644\u0627\u062b\u0629 \u0627\u0644\u0647\u0627\u0628\u0637", PatternType.BEARISH, "SELL", 0.78, 0.74, 3,
+                                      "\u062a\u0623\u0643\u064a\u062f \u0627\u0646\u0639\u0643\u0627\u0633 \u0647\u0628\u0648\u0637\u064a \u0628\u0639\u062f \u062d\u0631\u0627\u0645\u064a")
+        return None
+
+    def detect_all_patterns(self, candles: List[Candle]) -> List[CandlestickPattern]:
+        if len(candles) < 3:
+            return []
+        patterns: List[CandlestickPattern] = []
+        avg = self._avg_body(candles, 15)
+        curr = candles[-1]
+        prev = candles[-2]
+        prev2 = candles[-3] if len(candles) >= 3 else None
+
+        for fn in [self._detect_doji, self._detect_marubozu, self._detect_spinning_top]:
+            p = fn(curr, avg)
+            if p:
+                patterns.append(p)
+        p = self._detect_hammer(curr, avg, prev)
+        if p:
+            patterns.append(p)
+
+        for fn in [self._detect_engulfing, self._detect_harami, self._detect_piercing_darkcloud]:
+            p = fn(prev, curr, avg)
+            if p:
+                patterns.append(p)
+        p = self._detect_tweezer(prev, curr)
+        if p:
+            patterns.append(p)
+
+        if prev2:
+            for fn in [self._detect_morning_evening_star, self._detect_three_soldiers_crows, self._detect_three_inside]:
+                p = fn(prev2, prev, curr, avg) if fn != self._detect_three_inside else fn(prev2, prev, curr)
+                if p:
+                    patterns.append(p)
+
+        patterns.sort(key=lambda x: x.strength, reverse=True)
+        return patterns
+
+    def get_best_pattern(self, candles: List[Candle]) -> Optional[CandlestickPattern]:
+        pats = self.detect_all_patterns(candles)
+        return pats[0] if pats else None
+
+    def get_directional_score(self, candles: List[Candle]) -> Dict[str, float]:
+        pats = self.detect_all_patterns(candles)
+        buy_score = 0.0
+        sell_score = 0.0
+        for p in pats:
+            if p.direction == "BUY":
+                buy_score += p.strength * p.confidence
+            elif p.direction == "SELL":
+                sell_score += p.strength * p.confidence
+        total = buy_score + sell_score + 0.001
+        return {
+            "buy_score": round(buy_score, 3),
+            "sell_score": round(sell_score, 3),
+            "net": round(buy_score - sell_score, 3),
+            "direction": "BUY" if buy_score > sell_score else "SELL" if sell_score > buy_score else "NEUTRAL",
+            "patterns": [p.to_dict() for p in pats[:5]]
+        }
 
 
-# Global instance
 pattern_detector = PatternDetector()
-
-
-if __name__ == "__main__":
-    # Test the pattern detector
-    from .data_fetcher import BIQuoteClient
-    import asyncio
-    
-    async def test():
-        async with BIQuoteClient() as client:
-            candles = await client.get_historical_candles("1m", 500)
-            
-            detector = PatternDetector()
-            patterns = detector.detect_all_patterns(candles)
-            
-            print("Detected Patterns:")
-            for pattern_type, pattern_list in patterns.items():
-                if pattern_list:
-                    print(f"\n{pattern_type.value}:")
-                    for p in pattern_list[:3]:  # Show top 3
-                        print(f"  - {p.name} at {p.price_level:.2f} (strength: {p.strength:.2f})")
-    
-    asyncio.run(test())
