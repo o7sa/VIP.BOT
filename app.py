@@ -1,7 +1,6 @@
 """
 VIP.BOT - Main Application
-Glass Dashboard + Aggressive Japanese Candlestick Scalper
-OHLC exits (high/low) + trade persistence + multi TP events
+CRITICAL FIX: always track open trades for TP/SL (never skip exit checks)
 """
 
 import asyncio
@@ -84,14 +83,6 @@ class VIPBotEngine:
         start = datetime.utcnow()
         result: Dict[str, Any] = {"cycle": self.cycle_count, "timestamp": start.isoformat()}
 
-        can_trade, reason = risk_manager.can_open_trade(len(scalping_strategy.open_trades))
-        if not can_trade:
-            logger.warning(f"Trading paused: {reason}")
-            result["status"] = "paused"
-            result["reason"] = reason
-            self.last_cycle = result
-            return
-
         async with BIQuoteClient() as client:
             try:
                 price = await data_cache.get_price(client)
@@ -131,29 +122,44 @@ class VIPBotEngine:
             patterns = pattern_detector.detect_all_patterns(candles[-20:])
             self.latest_patterns = [p.to_dict() for p in patterns[:6]]
 
-            # Check exits using OHLC high/low so TP/SL are not missed
+            # ALWAYS check open trades first (even if risk blocks new entries)
             bar_high = last.high
             bar_low = last.low
             for trade in list(scalping_strategy.open_trades):
-                closed, events = scalping_strategy.check_exit(
-                    trade, current, bar_high=bar_high, bar_low=bar_low
-                )
-                if events and telegram_sender.is_configured:
-                    async with telegram_sender as tg:
-                        for ev in events:
-                            await tg.send_trade_closed(trade, event=ev)
-                if closed:
-                    risk_manager.record_trade(trade)
+                try:
+                    closed, events = scalping_strategy.check_exit(
+                        trade, current, bar_high=bar_high, bar_low=bar_low
+                    )
+                    logger.info(
+                        f"Exit check {trade.trade_id}: closed={closed} events={events} "
+                        f"price={current:.2f} H={bar_high:.2f} L={bar_low:.2f} "
+                        f"tp1={trade.tp1} tp2={trade.tp2} tp3={trade.tp3} sl={trade.stop_loss}"
+                    )
+                    if events and telegram_sender.is_configured:
+                        async with telegram_sender as tg:
+                            for ev in events:
+                                r = await tg.send_trade_closed(trade, event=ev)
+                                logger.info(f"Telegram event {ev} sent: ok={bool(r and r.get('ok'))}")
+                    if closed:
+                        risk_manager.record_trade(trade)
+                except Exception as e:
+                    logger.error(f"Exit check error: {e}", exp_info=True)
 
             risk_manager.update_open_trades(scalping_strategy.open_trades)
 
-            signal = scalping_strategy.generate_signal(candles, analysis, current)
+            # New signal only if risk allows AND no open trade
+            signal = None
             executed = None
-            if signal:
-                executed = scalping_strategy.execute_signal(signal)
-                if executed and telegram_sender.is_configured:
-                    async with telegram_sender as tg:
-                        await tg.send_signal(signal)
+            can_trade, reason = risk_manager.can_open_trade(len(scalping_strategy.open_trades))
+            if can_trade:
+                signal = scalping_strategy.generate_signal(candles, analysis, current)
+                if signal:
+                    executed = scalping_strategy.execute_signal(signal)
+                    if executed and telegram_sender.is_configured:
+                        async with telegram_sender as tg:
+                            await tg.send_signal(signal)
+            else:
+                logger.debug(f"No new entries: {reason}")
 
             elapsed = (datetime.utcnow() - start).total_seconds()
             result.update({
@@ -195,7 +201,7 @@ class VIPBotEngine:
             "latest_patterns": self.latest_patterns,
             "last_cycle": self.last_cycle,
             "account_balance": metrics.get("account_balance", 10000),
-            "version": "2.2.0-tp-fix"
+            "version": "2.2.1-exit-fix"
         }
 
 
@@ -205,7 +211,7 @@ engine = VIPBotEngine()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 50)
-    logger.info("VIP.BOT TP-Fix Edition starting...")
+    logger.info("VIP.BOT Exit-Fix Edition starting...")
     logger.info(f"Telegram configured: {bool(config.telegram.BOT_TOKEN)}")
     logger.info(f"Channel: {config.telegram.CHANNEL_ID}")
     logger.info(f"Port: {config.web.PORT}")
@@ -222,7 +228,7 @@ async def lifespan(app: FastAPI):
     await engine.stop()
 
 
-app = FastAPI(title="VIP.BOT", version="2.2.0", lifespan=lifespan)
+app = FastAPI(title="VIP.BOT", version="2.2.1", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 
 if os.path.isdir("static"):
@@ -237,10 +243,10 @@ async def dashboard(request: Request):
         try:
             return templates.TemplateResponse("dashboard.html", {"request": request})
         except Exception as e2:
-            logger.error(f"Dashboard template error: {e2}", exc_info=True)
+            logger.error(f"Dashboard template error: {e2}", exp_info=True)
             return HTMLResponse(content=f"<html><body style='background:#0f0c29;color:#fff;text-align:center;padding:40px'><h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p><pre>{e2}</pre></body></html>", status_code=200)
     except Exception as e:
-        logger.error(f"Dashboard template error: {e}", exc_info=True)
+        logger.error(f"Dashboard template error: {e}", exp_info=True)
         return HTMLResponse(content=f"<html><body style='background:#0f0c29;color:#fff;text-align:center;padding:40px'><h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p><pre>{e}</pre></body></html>", status_code=200)
 
 
