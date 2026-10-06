@@ -201,20 +201,27 @@ if os.path.isdir("static"):
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     try:
-        return templates.TemplateResponse("dashboard.html", {"request": request})
+        # Correct Starlette signature: TemplateResponse(request, name, context)
+        return templates.TemplateResponse(request, "dashboard.html", {"request": request})
+    except TypeError:
+        try:
+            return templates.TemplateResponse("dashboard.html", {"request": request})
+        except Exception as e2:
+            logger.error(f"Dashboard template error: {e2}", exc_info=True)
+            return HTMLResponse(
+                content=f"<html><body style='background:#0f0c29;color:#fff;font-family:sans-serif;text-align:center;padding:40px'>"
+                        f"<h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>\u062d\u0627\u0644\u0629 \u0627\u0644\u0628\u0648\u062a</a></p>"
+                        f"<pre>{e2}</pre></body></html>",
+                status_code=200
+            )
     except Exception as e:
         logger.error(f"Dashboard template error: {e}", exc_info=True)
-        html = f"""<!DOCTYPE html><html lang="ar" dir="rtl"><head>
-<meta charset="utf-8"><title>VIP.BOT</title>
-<style>body{{font-family:sans-serif;background:#0f0c29;color:#fff;padding:40px;text-align:center}}
-a{{color:#00d4aa}}</style></head><body>
-<h1>VIP.BOT</h1>
-<p>\u0627\u0644\u0648\u0627\u062c\u0647\u0629 \u0627\u0644\u0632\u062c\u0627\u062c\u064a\u0629 \u062a\u062d\u062a \u0627\u0644\u062a\u062d\u0645\u064a\u0644...</p>
-<p><a href="/api/status">\u062d\u0627\u0644\u0629 \u0627\u0644\u0628\u0648\u062a (JSON)</a></p>
-<p><a href="/api/health">Health</a></p>
-<pre style="text-align:left;max-width:600px;margin:20px auto;background:#1a1a2e;padding:16px;border-radius:8px;overflow:auto">{e}</pre>
-</body></html>"""
-        return HTMLResponse(content=html, status_code=200)
+        return HTMLResponse(
+            content=f"<html><body style='background:#0f0c29;color:#fff;font-family:sans-serif;text-align:center;padding:40px'>"
+                    f"<h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>\u062d\u0627\u0644\u0629 \u0627\u0644\u0628\u0648\u062a</a></p>"
+                    f"<pre>{e}</pre></body></html>",
+            status_code=200
+        )
 
 
 @app.get("/api/status")
