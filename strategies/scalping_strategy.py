@@ -4,9 +4,13 @@ Aggressive Scalping Strategy
 - TP1 / TP2 / TP3 with partial management
 - Max 50 min if losing, unlimited if winning
 - Analyze last 20 candles for entry
+- OHLC high/low for TP/SL (no missed targets)
+- Persist trades to disk (survive Render restart)
 """
 
 import logging
+import json
+import os
 import uuid
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional, Any, Tuple
@@ -137,11 +141,14 @@ class Trade:
             "tp2_hit": self.tp2_hit,
             "be_moved": self.be_moved,
             "trailing_activated": self.trailing_activated,
+            "highest_price": self.highest_price,
+            "lowest_price": self.lowest_price,
         }
 
 
 class ScalpingStrategy:
     MAX_LOSS_DURATION_MIN = 50
+    TRADES_FILE = "data/open_trades.json"
 
     def __init__(self):
         self.open_trades: List[Trade] = []
@@ -179,7 +186,6 @@ class ScalpingStrategy:
         if len(candles_1m) < 20:
             return None
 
-        # Analyze LAST 20 candles for entry
         recent = candles_1m[-20:]
         candle_score_data = self.detector.get_directional_score(recent)
         candle_buy = candle_score_data["buy_score"]
@@ -219,6 +225,17 @@ class ScalpingStrategy:
         pattern_name = ""
         if best_patterns:
             pattern_name = best_patterns[0].get("name") or best_patterns[0].get("name_ar") or ""
+
+        # Reject strong conflict (e.g. Gravestone Doji for BUY)
+        bearish_names = ("gravestone", "shooting star", "evening star", "bearish engul", "hanging man", "dark cloud")
+        bullish_names = ("hammer", "morning star", "bullish engul", "dragonfly", "inverted hammer", "piercing")
+        pname = (pattern_name or "").lower()
+        if direction == TradeDirection.BUY and any(x in pname for x in bearish_names):
+            logger.info(f"Skip BUY - conflicting pattern {pattern_name}")
+            return None
+        if direction == TradeDirection.SELL and any(x in pname for x in bullish_names):
+            logger.info(f"Skip SELL - conflicting pattern {pattern_name}")
+            return None
 
         trend = analysis_1m.trend or "NEUTRAL"
         multi_tf = f"M1: {trend}"
@@ -292,19 +309,30 @@ class ScalpingStrategy:
         )
         self.open_trades.append(trade)
         self.daily_trades += 1
+        self._save_trades()
         logger.info(f"Trade opened: {trade.trade_id} {trade.direction.value} @ {trade.entry_price}")
         return trade
 
-    def check_exit(self, trade: Trade, current_price: float) -> Tuple[bool, Optional[str]]:
+    def check_exit(
+        self,
+        trade: Trade,
+        current_price: float,
+        bar_high: float = None,
+        bar_low: float = None,
+    ) -> Tuple[bool, list]:
+        """Returns (closed, events_list). Uses bar high/low so TP/SL not missed on wicks."""
         if trade.status != TradeStatus.OPEN:
-            return False, None
+            return False, []
 
-        if current_price > trade.highest_price:
-            trade.highest_price = current_price
-        if current_price < trade.lowest_price:
-            trade.lowest_price = current_price
+        hi = bar_high if bar_high is not None else current_price
+        lo = bar_low if bar_low is not None else current_price
 
-        event = None
+        if hi > trade.highest_price:
+            trade.highest_price = hi
+        if lo < trade.lowest_price:
+            trade.lowest_price = lo
+
+        events = []
         is_buy = trade.direction == TradeDirection.BUY
 
         age_min = (datetime.utcnow() - trade.entry_time).total_seconds() / 60
@@ -318,20 +346,21 @@ class ScalpingStrategy:
             trade.profit_percent = (floating / trade.entry_price) * 100 if trade.entry_price else 0
             self.open_trades.remove(trade)
             self.closed_trades.append(trade)
-            return True, "TIME"
+            self._save_trades()
+            return True, ["TIME"]
 
         if not trade.tp1_hit:
-            hit_tp1 = (current_price >= trade.tp1) if is_buy else (current_price <= trade.tp1)
+            hit_tp1 = (hi >= trade.tp1) if is_buy else (lo <= trade.tp1)
             if hit_tp1:
                 trade.tp1_hit = True
                 be = trade.entry_price + (0.15 if is_buy else -0.15)
                 trade.stop_loss = round(be, 3)
                 trade.be_moved = True
-                event = "TP1"
+                events.append("TP1")
                 logger.info(f"TP1 hit {trade.trade_id} -> SL to BE {trade.stop_loss}")
 
         if trade.tp1_hit and not trade.tp2_hit:
-            hit_tp2 = (current_price >= trade.tp2) if is_buy else (current_price <= trade.tp2)
+            hit_tp2 = (hi >= trade.tp2) if is_buy else (lo <= trade.tp2)
             if hit_tp2:
                 trade.tp2_hit = True
                 new_sl = trade.tp1 + (0.2 if is_buy else -0.2)
@@ -340,35 +369,120 @@ class ScalpingStrategy:
                 elif not is_buy and new_sl < trade.stop_loss:
                     trade.stop_loss = round(new_sl, 3)
                 trade.trailing_activated = True
-                event = "TP2"
+                events.append("TP2")
+                logger.info(f"TP2 hit {trade.trade_id}")
 
-        hit_tp3 = (current_price >= trade.tp3) if is_buy else (current_price <= trade.tp3)
-        hit_sl = (current_price <= trade.stop_loss) if is_buy else (current_price >= trade.stop_loss)
+        hit_tp3 = (hi >= trade.tp3) if is_buy else (lo <= trade.tp3)
+        hit_sl = (lo <= trade.stop_loss) if is_buy else (hi >= trade.stop_loss)
 
         if hit_tp3 or hit_sl:
-            trade.exit_price = current_price
+            if hit_tp3:
+                trade.exit_price = trade.tp3
+                trade.exit_reason = "TP3 Full Target"
+                events.append("TP3")
+            elif trade.be_moved and hit_sl:
+                trade.exit_price = trade.stop_loss
+                trade.exit_reason = "Break Even"
+                events.append("BE")
+            else:
+                trade.exit_price = trade.stop_loss
+                trade.exit_reason = "Stop Loss"
+                events.append("SL")
+
             trade.exit_time = datetime.utcnow()
             trade.status = TradeStatus.CLOSED
+            px = trade.exit_price
             if is_buy:
-                trade.profit = (current_price - trade.entry_price) * trade.lot_size * 100
+                trade.profit = (px - trade.entry_price) * trade.lot_size * 100
             else:
-                trade.profit = (trade.entry_price - current_price) * trade.lot_size * 100
+                trade.profit = (trade.entry_price - px) * trade.lot_size * 100
             trade.profit_percent = (trade.profit / (trade.entry_price * trade.lot_size)) * 100 if trade.entry_price else 0
-            if hit_tp3:
-                trade.exit_reason = "TP3 Full Target"
-                event = "TP3"
-            elif trade.be_moved and hit_sl:
-                trade.exit_reason = "Break Even"
-                event = "BE"
-            else:
-                trade.exit_reason = "Stop Loss"
-                event = "SL"
             self.open_trades.remove(trade)
             self.closed_trades.append(trade)
+            self._save_trades()
             logger.info(f"Trade closed: {trade.trade_id} {trade.exit_reason} P/L={trade.profit:.2f}")
-            return True, event
+            return True, events
 
-        return False, event
+        if events:
+            self._save_trades()
+        return False, events
+
+    def _save_trades(self):
+        try:
+            os.makedirs("data", exist_ok=True)
+            payload = {
+                "open": [t.to_dict() for t in self.open_trades],
+                "closed": [t.to_dict() for t in self.closed_trades[-100:]],
+                "daily_trades": self.daily_trades,
+                "current_day": self.current_day.isoformat(),
+            }
+            with open(self.TRADES_FILE, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"save trades failed: {e}")
+
+    def load_trades(self):
+        try:
+            if not os.path.exists(self.TRADES_FILE):
+                return
+            with open(self.TRADES_FILE, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            self.daily_trades = payload.get("daily_trades", 0)
+            day = payload.get("current_day")
+            if day:
+                self.current_day = date.fromisoformat(day)
+            self.open_trades = []
+            for d in payload.get("open", []):
+                t = self._trade_from_dict(d)
+                if t:
+                    self.open_trades.append(t)
+            self.closed_trades = []
+            for d in payload.get("closed", []):
+                t = self._trade_from_dict(d)
+                if t:
+                    self.closed_trades.append(t)
+            logger.info(f"Loaded {len(self.open_trades)} open + {len(self.closed_trades)} closed trades")
+        except Exception as e:
+            logger.warning(f"load trades failed: {e}")
+
+    def _trade_from_dict(self, d: Dict) -> Optional[Trade]:
+        try:
+            direction = TradeDirection.BUY if d.get("direction") == "BUY" else TradeDirection.SELL
+            status = TradeStatus.OPEN if d.get("status") == "OPEN" else TradeStatus.CLOSED
+            entry_time = datetime.fromisoformat(d["entry_time"]) if d.get("entry_time") else datetime.utcnow()
+            exit_time = datetime.fromisoformat(d["exit_time"]) if d.get("exit_time") else None
+            return Trade(
+                trade_id=d.get("trade_id", ""),
+                signal_id=d.get("signal_id", ""),
+                direction=direction,
+                entry_price=float(d.get("entry_price", 0)),
+                entry_time=entry_time,
+                stop_loss=float(d.get("stop_loss", 0)),
+                take_profit=float(d.get("take_profit", 0)),
+                tp1=float(d.get("tp1", 0)),
+                tp2=float(d.get("tp2", 0)),
+                tp3=float(d.get("tp3", 0)),
+                lot_size=float(d.get("lot_size", 0.1)),
+                status=status,
+                exit_price=float(d["exit_price"]) if d.get("exit_price") is not None else None,
+                exit_time=exit_time,
+                exit_reason=d.get("exit_reason"),
+                profit=d.get("profit"),
+                profit_percent=d.get("profit_percent"),
+                reason=d.get("reason", ""),
+                patterns=d.get("patterns") or [],
+                pattern_name=d.get("pattern_name", ""),
+                score=int(d.get("score", 0)),
+                trailing_activated=bool(d.get("trailing_activated", False)),
+                tp1_hit=bool(d.get("tp1_hit", False)),
+                tp2_hit=bool(d.get("tp2_hit", False)),
+                be_moved=bool(d.get("be_moved", False)),
+                highest_price=float(d.get("highest_price") or d.get("entry_price") or 0),
+                lowest_price=float(d.get("lowest_price") or d.get("entry_price") or 999999),
+            )
+        except Exception as e:
+            logger.warning(f"trade_from_dict error: {e}")
+            return None
 
     def get_open_trades_dict(self) -> List[Dict]:
         return [t.to_dict() for t in self.open_trades]
