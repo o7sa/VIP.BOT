@@ -12,8 +12,8 @@ from typing import List, Optional
 #  🔑 ضع توكن التليجرام والآي دي هنا مباشرة (بدون متغيرات بيئة)
 # ============================================================
 TELEGRAM_BOT_TOKEN = "8976865494:AAEoEOA17SLSQf1V8SrFvYE31NgPZOGuEs0"
-TELEGRAM_CHANNEL_ID = "@PQYNC"          # لازم يبدأ بـ @ أو رقم القناة الكامل
-TELEGRAM_ADMIN_ID = "8952278702"        # رقم فقط بدون ID:
+TELEGRAM_CHANNEL_ID = "@PQYNC"
+TELEGRAM_ADMIN_ID = "8952278702"
 # ============================================================
 
 
@@ -94,7 +94,7 @@ class WebConfig:
     HOST: str = "0.0.0.0"
     PORT: int = int(os.getenv("PORT", 10000))
     DEBUG: bool = False
-    REFRESH_INTERVAL_MS: int = 3000
+    REFRESH_INTERVAL_MS: int = 1000
 
 
 @dataclass
@@ -103,8 +103,8 @@ class AppConfig:
     LOG_LEVEL: str = "INFO"
     DATA_STORE_DAYS: int = 30
     CACHE_ENABLED: bool = True
-    CACHE_TTL: int = 45
-    BOT_LOOP_INTERVAL: float = 25.0
+    CACHE_TTL: int = 2              # cache price/candles for 2 seconds only
+    BOT_LOOP_INTERVAL: float = 5.0  # analysis cycle every 5 seconds (faster)
 
 
 class Config:
