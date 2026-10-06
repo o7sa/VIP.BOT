@@ -1,15 +1,16 @@
 """
-Telegram Signal Sender + simple /start command handler
+Telegram Signal Sender - Professional format
+TP1 / TP2 / TP3 + BE management messages
 """
 
 import asyncio
 import aiohttp
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from datetime import datetime
 
 from config.settings import config
-from strategies.scalping_strategy import TradeSignal, Trade, TradeDirection, TradeStatus
+from strategies.scalping_strategy import TradeSignal, Trade, TradeDirection
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +58,7 @@ class TelegramSender:
         try:
             async with self.session.post(
                 f"{self.base}/sendMessage",
-                json={
-                    "chat_id": target,
-                    "text": text,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True
-                }
+                json={"chat_id": target, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
             ) as resp:
                 data = await resp.json()
                 if not data.get("ok"):
@@ -73,52 +69,100 @@ class TelegramSender:
             return None
 
     async def send_signal(self, signal: TradeSignal) -> Optional[Dict]:
-        dir_emoji = "\U0001f7e2" if signal.direction == TradeDirection.BUY else "\U0001f534"
-        dir_ar = "\u0634\u0631\u0627\u0621" if signal.direction == TradeDirection.BUY else "\u0628\u064a\u0639"
-        stars = "\u2b50" * min(5, int(signal.strength * 5) + 1)
+        is_buy = signal.direction == TradeDirection.BUY
+        header = "\U0001f7e2 +BUY - QUALITY \u0625\u0634\u0627\u0631\u0629" if is_buy else "\U0001f534 +SELL - QUALITY \u0625\u0634\u0627\u0631\u0629"
+        sl_dist = abs(signal.entry_price - signal.stop_loss)
         text = f"""
-{dir_emoji} <b>\u0625\u0634\u0627\u0631\u0629 VIP.BOT</b> {dir_emoji}
+{header}
 
-\U0001f3af <b>\u0627\u0644\u0627\u062a\u062c\u0627\u0647:</b> {dir_ar} \u0639\u062f\u0648\u0627\u0646\u064a
-\U0001f4b0 <b>\u0633\u0639\u0631 \u0627\u0644\u062f\u062e\u0648\u0644:</b> <code>{signal.entry_price:.2f}</code>
-\u26d4 <b>\u0633\u062a\u0648\u0628 \u0644\u0648\u0633:</b> <code>{signal.stop_loss:.2f}</code>
-\U0001f3af <b>\u062a\u064a\u0643 \u0628\u0631\u0648\u0641\u064a\u062a:</b> <code>{signal.take_profit:.2f}</code>
+\U0001f194 <code>{signal.signal_id}</code>
+\u26a1 \u0627\u0644\u062f\u062e\u0648\u0644: <b>{signal.entry_price:.3f}</b>
 
-\U0001f4aa <b>\u0642\u0648\u0629 \u0627\u0644\u0625\u0634\u0627\u0631\u0629:</b> {signal.strength*100:.0f}% {stars}
-\u2705 <b>\u0627\u0644\u062b\u0642\u0629:</b> {signal.confidence*100:.0f}%
+\U0001f534 SL: <code>{signal.stop_loss:.2f}</code> ({sl_dist:.2f})
+\U0001f3af TP1: <code>{signal.tp1:.2f}</code>
+\U0001f680 TP2: <code>{signal.tp2:.2f}</code>
+\U0001f3c6 TP3: <code>{signal.tp3:.2f}</code>
 
-\U0001f4ca <b>\u0633\u0628\u0628 \u0627\u0644\u062f\u062e\u0648\u0644:</b>
-{signal.reason}
+\U0001f4ca A \u2705 | Score: <b>{signal.score}/100</b>
+\U0001f4c8 RSI: {signal.indicators.get('rsi', '\u2014')}
+\U0001f56f \u0627\u0644\u0646\u0645\u0637: <b>{signal.pattern_name or '\u2014'}</b>
+\U0001f9e0 {signal.multi_tf or ''}
+\U0001f4cc {signal.reason}
+"""
+        return await self.send_message(text.strip())
 
-\U0001f56f <b>\u0623\u0646\u0645\u0627\u0637 \u0627\u0644\u0634\u0645\u0648\u0639:</b> {', '.join(signal.patterns) if signal.patterns else '\u2014'}
+    async def send_tp1_secured(self, trade: Trade) -> Optional[Dict]:
+        side = "BUY" if trade.direction == TradeDirection.BUY else "SELL"
+        text = f"""
+\u2705 <b>\u062a\u0623\u0645\u064a\u0646 TP1 - {side}</b>
 
-\u23f0 {signal.timestamp.strftime('%Y-%m-%d %H:%M:%S')} UTC
+\u0627\u0644\u062f\u062e\u0648\u0644: <code>{trade.entry_price:.3f}</code>
+\u0627\u0644\u0633\u0639\u0631: <code>{trade.tp1:.3f}</code>
+\U0001f6e1 SL \u0627\u0644\u062c\u062f\u064a\u062f: <code>{trade.stop_loss:.2f}</code>
+\U0001f680 \u0646\u0643\u0645\u0644 \u0625\u0644\u0649 TP2: <code>{trade.tp2:.2f}</code>
+"""
+        return await self.send_message(text.strip())
+
+    async def send_tp2_secured(self, trade: Trade) -> Optional[Dict]:
+        is_buy = trade.direction == TradeDirection.BUY
+        side = "BUY" if is_buy else "SELL"
+        floating = (trade.tp2 - trade.entry_price) if is_buy else (trade.entry_price - trade.tp2)
+        text = f"""
+\U0001f680 <b>TP2 - {side} - \u0645\u0624\u0645\u0646 \u2705</b>
++{floating:.2f}
+\U0001f6e1 SL: <code>{trade.stop_loss:.2f}</code>
+\U0001f3c6 \u0645\u0643\u0645\u0644\u064a\u0646 \u0644\u0640 TP3: <code>{trade.tp3:.2f}</code>
+"""
+        return await self.send_message(text.strip())
+
+    async def send_tp3_hit(self, trade: Trade) -> Optional[Dict]:
+        side = "BUY" if trade.direction == TradeDirection.BUY else "SELL"
+        profit = trade.profit or 0
+        text = f"""
+\U0001f3c6 <b>TP3 - {side} - \u0647\u062f\u0641 \u0643\u0627\u0645\u0644</b>
++{profit:.2f}
+"""
+        return await self.send_message(text.strip())
+
+    async def send_be_closed(self, trade: Trade) -> Optional[Dict]:
+        side = "BUY" if trade.direction == TradeDirection.BUY else "SELL"
+        profit = trade.profit or 0
+        mins = 0
+        if trade.exit_time and trade.entry_time:
+            mins = int((trade.exit_time - trade.entry_time).total_seconds() / 60)
+        text = f"""
+\U0001f6e1 <b>BE - {side}</b>
+\u0627\u0644\u062f\u062e\u0648\u0644: <code>{trade.entry_price:.3f}</code>
+\u0627\u0644\u062e\u0631\u0648\u062c: <code>{trade.exit_price:.3f}</code>
+{profit:+.2f}
+\u062f{mins}
+"""
+        return await self.send_message(text.strip())
+
+    async def send_trade_closed(self, trade: Trade, event: str = None) -> Optional[Dict]:
+        if event == "TP1":
+            return await self.send_tp1_secured(trade)
+        if event == "TP2":
+            return await self.send_tp2_secured(trade)
+        if event == "TP3":
+            return await self.send_tp3_hit(trade)
+        if event == "BE":
+            return await self.send_be_closed(trade)
+        profit = trade.profit or 0
+        emoji = "\u2705" if profit >= 0 else "\u274c"
+        side = "BUY" if trade.direction == TradeDirection.BUY else "SELL"
+        text = f"""
+{emoji} <b>\u0625\u063a\u0644\u0627\u0642 - {side}</b>
+\U0001f194 <code>{trade.trade_id}</code>
+\u0627\u0644\u062f\u062e\u0648\u0644: <code>{trade.entry_price:.3f}</code>
+\u0627\u0644\u062e\u0631\u0648\u062c: <code>{trade.exit_price:.3f}</code>
+\u0627\u0644\u0646\u062a\u064a\u062c\u0629: <b>{profit:+.2f}</b>
+\u0627\u0644\u0633\u0628\u0628: {trade.exit_reason or '\u2014'}
 """
         return await self.send_message(text.strip())
 
     async def send_trade_opened(self, trade: Trade) -> Optional[Dict]:
-        dir_ar = "\u0634\u0631\u0627\u0621" if trade.direction == TradeDirection.BUY else "\u0628\u064a\u0639"
-        text = f"""
-\u2705 <b>\u062a\u0645 \u0641\u062a\u062d \u0635\u0641\u0642\u0629</b>
-
-\U0001f194 <code>{trade.trade_id}</code>
-\U0001f4c8 {dir_ar} @ <code>{trade.entry_price:.2f}</code>
-\u26d4 SL: <code>{trade.stop_loss:.2f}</code> | \U0001f3af TP: <code>{trade.take_profit:.2f}</code>
-\U0001f4dd {trade.reason}
-"""
-        return await self.send_message(text.strip())
-
-    async def send_trade_closed(self, trade: Trade) -> Optional[Dict]:
-        profit = trade.profit or 0
-        emoji = "\u2705" if profit >= 0 else "\u274c"
-        text = f"""
-{emoji} <b>\u062a\u0645 \u0625\u063a\u0644\u0627\u0642 \u0635\u0641\u0642\u0629</b>
-
-\U0001f194 <code>{trade.trade_id}</code>
-\U0001f4b0 \u0627\u0644\u0646\u062a\u064a\u062c\u0629: <code>{profit:+.2f}</code>
-\U0001f4dd \u0627\u0644\u0633\u0628\u0628: {trade.exit_reason or '\u2014'}
-"""
-        return await self.send_message(text.strip())
+        return None
 
     async def send_start_reply(self, chat_id: str):
         text = """
@@ -126,9 +170,10 @@ class TelegramSender:
 
 \u0627\u0644\u0628\u0648\u062a \u064a\u0639\u0645\u0644 \u0627\u0644\u0622\u0646 \u0648\u064a\u062d\u0644\u0644 \u0634\u0645\u0648\u0639 \u0627\u0644\u0630\u0647\u0628 XAUUSD.
 
-\u2705 \u064a\u0631\u0633\u0644 \u0627\u0644\u0625\u0634\u0627\u0631\u0627\u062a \u062a\u0644\u0642\u0627\u0626\u064a\u0627\u064b \u0644\u0644\u0642\u0646\u0627\u0629 \u0639\u0646\u062f \u0648\u062c\u0648\u062f \u0641\u0631\u0635\u0629
-\U0001f56f \u064a\u0639\u062a\u0645\u062f \u0639\u0644\u0649 \u0627\u0644\u0634\u0645\u0648\u0639 \u0627\u0644\u064a\u0627\u0628\u0627\u0646\u064a\u0629 \u0623\u0648\u0644\u0627\u064b
-\U0001f4ca \u0627\u0644\u0648\u0627\u062c\u0647\u0629 \u0627\u0644\u0632\u062c\u0627\u062c\u064a\u0629 \u0645\u062a\u0627\u062d\u0629 \u0639\u0644\u0649 \u0627\u0644\u0633\u064a\u0631\u0641\u0631
+\u2705 \u0635\u0641\u0642\u0629 \u0648\u0627\u062d\u062f\u0629 \u0641\u0642\u0637 \u0641\u064a \u0646\u0641\u0633 \u0627\u0644\u0648\u0642\u062a
+\U0001f56f \u064a\u0639\u062a\u0645\u062f \u0639\u0644\u0649 \u0622\u062e\u0631 15 \u0634\u0645\u0639\u0629 \u064a\u0627\u0628\u0627\u0646\u064a\u0629
+\U0001f3af TP1 / TP2 / TP3 \u0645\u0639 \u062a\u0623\u0645\u064a\u0646 \u062a\u0644\u0642\u0627\u0626\u064a
+\u23f1 \u0623\u0642\u0635\u0649 50 \u062f\u0642\u064a\u0642\u0629 \u0625\u0630\u0627 \u0643\u0627\u0646\u062a \u0627\u0644\u0635\u0641\u0642\u0629 \u062e\u0627\u0633\u0631\u0629
 
 \u0623\u0631\u0633\u0644 /status \u0644\u0645\u0639\u0631\u0641\u0629 \u062d\u0627\u0644\u0629 \u0627\u0644\u0628\u0648\u062a
 """
@@ -172,8 +217,7 @@ class TelegramSender:
                         await self.send_start_reply(chat_id)
                     elif text.startswith("/status") and status_provider:
                         try:
-                            st = status_provider()
-                            await self.send_status_reply(chat_id, st)
+                            await self.send_status_reply(chat_id, status_provider())
                         except Exception as e:
                             logger.error(f"status reply error: {e}")
             except asyncio.CancelledError:
@@ -184,12 +228,11 @@ class TelegramSender:
 
     def start_polling(self, status_provider=None):
         if not self.token:
-            logger.warning("Telegram token missing \u2013 polling disabled")
             return
         if self._poll_task and not self._poll_task.done():
             return
         self._poll_task = asyncio.create_task(self._handle_updates(status_provider))
-        logger.info("Telegram command polling started (/start, /status)")
+        logger.info("Telegram polling started")
 
     async def stop_polling(self):
         if self._poll_task:
