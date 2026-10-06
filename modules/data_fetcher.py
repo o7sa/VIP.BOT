@@ -2,7 +2,7 @@
 Data Fetcher Module - Fetches XAUUSD data from BIQUOTE API
 Correct endpoints:
   Price  -> https://biquote.io/api/XAUUSD
-  OHLC   -> https://biquote.io/api/XAUUSD/ohlc?interval=1m&limit=200
+  OHLC   -> https://biquote.io/api/XAUUSD/ohlc?interval=1m&limit=400
 """
 
 import asyncio
@@ -129,8 +129,6 @@ class MarketData:
 
 
 class BIQuoteClient:
-    """Client for biquote.io – correct endpoints"""
-
     def __init__(self):
         self.base_url = "https://biquote.io"
         self.symbol = getattr(config.biquote, "SYMBOL", "XAUUSD") or "XAUUSD"
@@ -143,7 +141,7 @@ class BIQuoteClient:
         self.session = aiohttp.ClientSession(timeout=timeout)
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, exp_tb):
         if self.session:
             await self.session.close()
             self.session = None
@@ -170,23 +168,18 @@ class BIQuoteClient:
         raise Exception(f"Failed after {self.max_retries} attempts: {url} | {last_err}")
 
     async def get_current_price(self) -> MarketData:
-        """GET /api/XAUUSD"""
         data = await self._get(f"/api/{self.symbol}")
         ts_raw = data.get("timestamp") or data.get("lastQuoteAt") or data.get("time")
         try:
             timestamp = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00").replace("+00:00", ""))
         except Exception:
             timestamp = datetime.utcnow()
-
         bid = float(data.get("bid", 0))
         ask = float(data.get("ask", 0))
         mid = float(data.get("mid", (bid + ask) / 2 if bid and ask else 0))
-
         return MarketData(
             symbol=data.get("symbol", self.symbol),
-            bid=bid,
-            ask=ask,
-            mid=mid,
+            bid=bid, ask=ask, mid=mid,
             spread=float(data.get("spread", ask - bid if ask and bid else 0)),
             high=float(data.get("high", 0)),
             low=float(data.get("low", 0)),
@@ -196,14 +189,12 @@ class BIQuoteClient:
             volume=float(data.get("volume", 0))
         )
 
-    async def get_historical_candles(self, timeframe: str = "1m", limit: int = 200) -> List[Candle]:
-        """GET /api/XAUUSD/ohlc?interval=1m&limit=200"""
+    async def get_historical_candles(self, timeframe: str = "1m", limit: int = 400) -> List[Candle]:
         interval_map = {
             "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
             "1h": "1h", "4h": "4h", "1d": "1d"
         }
         interval = interval_map.get(timeframe, "1m")
-
         data = await self._get(
             f"/api/{self.symbol}/ohlc",
             params={"interval": interval, "limit": limit}
@@ -221,9 +212,9 @@ class BIQuoteClient:
 
     async def get_multiple_timeframes(self, timeframes: List[str] = None) -> Dict[str, List[Candle]]:
         if timeframes is None:
-            timeframes = ["1m", "5m", "15m", "30m", "1h"]
+            timeframes = ["1m", "5m", "15m", "30m", "1h", "4h"]
         results = {}
-        tasks = [self.get_historical_candles(tf, 200) for tf in timeframes]
+        tasks = [self.get_historical_candles(tf, 400) for tf in timeframes]
         fetched = await asyncio.gather(*tasks, return_exceptions=True)
         for tf, res in zip(timeframes, fetched):
             results[tf] = res if isinstance(res, list) else []
@@ -234,7 +225,7 @@ class DataCache:
     def __init__(self):
         self._cache: Dict[str, Any] = {}
         self._ts: Dict[str, datetime] = {}
-        self._ttl = timedelta(seconds=getattr(config.app, "CACHE_TTL", 30))
+        self._ttl = timedelta(seconds=getattr(config.app, "CACHE_TTL", 2))
         self._lock = asyncio.Lock()
 
     async def get_price(self, client: BIQuoteClient) -> MarketData:
@@ -247,7 +238,7 @@ class DataCache:
             self._ts[key] = datetime.utcnow()
             return price
 
-    async def get_candles(self, client: BIQuoteClient, tf: str, limit: int = 200) -> List[Candle]:
+    async def get_candles(self, client: BIQuoteClient, tf: str, limit: int = 400) -> List[Candle]:
         key = f"c_{tf}_{limit}"
         async with self._lock:
             if key in self._cache and datetime.utcnow() - self._ts.get(key, datetime.min) < self._ttl:
