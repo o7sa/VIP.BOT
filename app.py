@@ -1,7 +1,7 @@
 """
 VIP.BOT - Main Application
 Glass Dashboard + Aggressive Japanese Candlestick Scalper
-OHLC display + 400 candles multi-TF + last 20 for entry
+OHLC exits (high/low) + trade persistence + multi TP events
 """
 
 import asyncio
@@ -52,6 +52,10 @@ class VIPBotEngine:
     async def start(self):
         if self.running:
             return
+        try:
+            scalping_strategy.load_trades()
+        except Exception as e:
+            logger.warning(f"load_trades: {e}")
         self.running = True
         self._task = asyncio.create_task(self._loop())
         logger.info("VIP.BOT Engine started")
@@ -127,11 +131,17 @@ class VIPBotEngine:
             patterns = pattern_detector.detect_all_patterns(candles[-20:])
             self.latest_patterns = [p.to_dict() for p in patterns[:6]]
 
+            # Check exits using OHLC high/low so TP/SL are not missed
+            bar_high = last.high
+            bar_low = last.low
             for trade in list(scalping_strategy.open_trades):
-                closed, event = scalping_strategy.check_exit(trade, current)
-                if event and telegram_sender.is_configured:
+                closed, events = scalping_strategy.check_exit(
+                    trade, current, bar_high=bar_high, bar_low=bar_low
+                )
+                if events and telegram_sender.is_configured:
                     async with telegram_sender as tg:
-                        await tg.send_trade_closed(trade, event=event)
+                        for ev in events:
+                            await tg.send_trade_closed(trade, event=ev)
                 if closed:
                     risk_manager.record_trade(trade)
 
@@ -185,7 +195,7 @@ class VIPBotEngine:
             "latest_patterns": self.latest_patterns,
             "last_cycle": self.last_cycle,
             "account_balance": metrics.get("account_balance", 10000),
-            "version": "2.1.0-ohlc"
+            "version": "2.2.0-tp-fix"
         }
 
 
@@ -195,7 +205,7 @@ engine = VIPBotEngine()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 50)
-    logger.info("VIP.BOT OHLC Edition starting...")
+    logger.info("VIP.BOT TP-Fix Edition starting...")
     logger.info(f"Telegram configured: {bool(config.telegram.BOT_TOKEN)}")
     logger.info(f"Channel: {config.telegram.CHANNEL_ID}")
     logger.info(f"Port: {config.web.PORT}")
@@ -212,7 +222,7 @@ async def lifespan(app: FastAPI):
     await engine.stop()
 
 
-app = FastAPI(title="VIP.BOT", version="2.1.0", lifespan=lifespan)
+app = FastAPI(title="VIP.BOT", version="2.2.0", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 
 if os.path.isdir("static"):
@@ -230,7 +240,7 @@ async def dashboard(request: Request):
             logger.error(f"Dashboard template error: {e2}", exc_info=True)
             return HTMLResponse(content=f"<html><body style='background:#0f0c29;color:#fff;text-align:center;padding:40px'><h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p><pre>{e2}</pre></body></html>", status_code=200)
     except Exception as e:
-        logger.error(f"Dashboard template error: {e}", exp_info=True)
+        logger.error(f"Dashboard template error: {e}", exc_info=True)
         return HTMLResponse(content=f"<html><body style='background:#0f0c29;color:#fff;text-align:center;padding:40px'><h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p><pre>{e}</pre></body></html>", status_code=200)
 
 
