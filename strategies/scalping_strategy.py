@@ -1,24 +1,21 @@
 """
-Aggressive Scalping Strategy for XAUUSD
-High-frequency trading with 20 trades per day
+Aggressive Scalping Strategy
+Primary driver: Japanese Candlestick Patterns
+Secondary: Technical Indicators
+Low barriers - bot decides based on combined smart score
 """
 
-import asyncio
 import logging
-from typing import List, Dict, Tuple, Optional, Any
+import uuid
+from datetime import datetime, date
+from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
 from enum import Enum
 
-from modules.data_fetcher import Candle, MarketData, BIQuoteClient
-from modules.technical_analyzer import (
-    TechnicalAnalyzer, 
-    AnalysisResult, 
-    SignalType,
-    TrendDirection
-)
-from modules.pattern_detector import PatternDetector, PatternType
 from config.settings import config
+from modules.data_fetcher import Candle
+from modules.pattern_detector import PatternDetector, pattern_detector, CandlestickPattern
+from modules.technical_analyzer import TechnicalAnalyzer, technical_analyzer, AnalysisResult
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +26,6 @@ class TradeDirection(Enum):
 
 
 class TradeStatus(Enum):
-    PENDING = "PENDING"
     OPEN = "OPEN"
     CLOSED = "CLOSED"
     CANCELLED = "CANCELLED"
@@ -37,48 +33,46 @@ class TradeStatus(Enum):
 
 @dataclass
 class TradeSignal:
-    """Represents a trading signal"""
     signal_id: str
     timestamp: datetime
     direction: TradeDirection
     entry_price: float
     stop_loss: float
     take_profit: float
-    confidence: float  # 0-1
-    strength: float  # 0-1
-    
-    # Signal reasoning
+    confidence: float
+    strength: float
     reason: str
-    indicators: Dict[str, float] = field(default_factory=dict)
+    indicators: Dict[str, Any] = field(default_factory=dict)
     patterns: List[str] = field(default_factory=list)
     timeframe: str = "1m"
-    
-    # Risk management
-    risk_percent: float = 0.02  # 2% per trade
+    risk_percent: float = 0.02
     lot_size: float = 0.1
-    
+    candle_score: float = 0.0
+    indicator_score: float = 0.0
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "signal_id": self.signal_id,
             "timestamp": self.timestamp.isoformat(),
             "direction": self.direction.value,
-            "entry_price": self.entry_price,
-            "stop_loss": self.stop_loss,
-            "take_profit": self.take_profit,
-            "confidence": self.confidence,
-            "strength": self.strength,
+            "entry_price": round(self.entry_price, 5),
+            "stop_loss": round(self.stop_loss, 5),
+            "take_profit": round(self.take_profit, 5),
+            "confidence": round(self.confidence, 3),
+            "strength": round(self.strength, 3),
             "reason": self.reason,
             "indicators": self.indicators,
             "patterns": self.patterns,
             "timeframe": self.timeframe,
             "risk_percent": self.risk_percent,
-            "lot_size": self.lot_size
+            "lot_size": self.lot_size,
+            "candle_score": round(self.candle_score, 3),
+            "indicator_score": round(self.indicator_score, 3)
         }
 
 
 @dataclass
 class Trade:
-    """Represents an executed trade"""
     trade_id: str
     signal_id: str
     direction: TradeDirection
@@ -87,335 +81,162 @@ class Trade:
     stop_loss: float
     take_profit: float
     lot_size: float
-    
-    # Exit info
+    status: TradeStatus = TradeStatus.OPEN
     exit_price: Optional[float] = None
     exit_time: Optional[datetime] = None
     exit_reason: Optional[str] = None
-    
-    # Performance
     profit: Optional[float] = None
     profit_percent: Optional[float] = None
-    status: TradeStatus = TradeStatus.PENDING
-    
+    reason: str = ""
+    patterns: List[str] = field(default_factory=list)
+    trailing_activated: bool = False
+    highest_price: float = 0.0
+    lowest_price: float = 999999.0
+
     def to_dict(self) -> Dict[str, Any]:
-        result = {
+        return {
             "trade_id": self.trade_id,
             "signal_id": self.signal_id,
             "direction": self.direction.value,
-            "entry_price": self.entry_price,
+            "entry_price": round(self.entry_price, 5),
             "entry_time": self.entry_time.isoformat(),
-            "stop_loss": self.stop_loss,
-            "take_profit": self.take_profit,
+            "stop_loss": round(self.stop_loss, 5),
+            "take_profit": round(self.take_profit, 5),
             "lot_size": self.lot_size,
-            "status": self.status.value
-        }
-        
-        if self.exit_price:
-            result["exit_price"] = self.exit_price
-        if self.exit_time:
-            result["exit_time"] = self.exit_time.isoformat()
-        if self.exit_reason:
-            result["exit_reason"] = self.exit_reason
-        if self.profit is not None:
-            result["profit"] = self.profit
-        if self.profit_percent is not None:
-            result["profit_percent"] = self.profit_percent
-        
-        return result
-    
-    def calculate_profit(self, exit_price: float) -> Tuple[float, float]:
-        """Calculate profit in points and percentage"""
-        if self.direction == TradeDirection.BUY:
-            profit_points = (exit_price - self.entry_price) * 100  # XAUUSD is typically quoted with 2 decimals
-        else:
-            profit_points = (self.entry_price - exit_price) * 100
-        
-        # For XAUUSD, 1 point = 0.01, so we need to adjust
-        # Assuming standard lot size calculations
-        pip_value = 0.01  # 1 pip = 0.01 for XAUUSD
-        profit_usd = profit_points * pip_value * self.lot_size * 100000  # Standard lot is 100,000 units
-        
-        # Percentage based on margin (assuming 1:100 leverage)
-        margin = self.entry_price * self.lot_size * 100000 / 100  # 1:100 leverage
-        profit_percent = (profit_usd / margin) * 100 if margin > 0 else 0
-        
-        return profit_usd, profit_percent
-
-
-@dataclass
-class TradingSession:
-    """Represents a trading session"""
-    session_id: str
-    start_time: datetime
-    end_time: Optional[datetime] = None
-    trades: List[Trade] = field(default_factory=list)
-    signals_generated: int = 0
-    signals_executed: int = 0
-    total_profit: float = 0.0
-    max_drawdown: float = 0.0
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "session_id": self.session_id,
-            "start_time": self.start_time.isoformat(),
-            "end_time": self.end_time.isoformat() if self.end_time else None,
-            "trades_count": len(self.trades),
-            "signals_generated": self.signals_generated,
-            "signals_executed": self.signals_executed,
-            "total_profit": self.total_profit,
-            "max_drawdown": self.max_drawdown
+            "status": self.status.value,
+            "exit_price": round(self.exit_price, 5) if self.exit_price else None,
+            "exit_time": self.exit_time.isoformat() if self.exit_time else None,
+            "exit_reason": self.exit_reason,
+            "profit": round(self.profit, 2) if self.profit is not None else None,
+            "profit_percent": round(self.profit_percent, 3) if self.profit_percent is not None else None,
+            "reason": self.reason,
+            "patterns": self.patterns,
+            "trailing_activated": self.trailing_activated
         }
 
 
 class ScalpingStrategy:
-    """Aggressive Scalping Strategy for XAUUSD"""
-    
     def __init__(self):
-        self.analyzer = TechnicalAnalyzer()
-        self.pattern_detector = PatternDetector()
-        self.trade_counter = 0
-        self.daily_trades = 0
-        self.daily_profit = 0.0
-        self.daily_loss = 0.0
         self.open_trades: List[Trade] = []
         self.closed_trades: List[Trade] = []
-        self.session_start: Optional[datetime] = None
-        
-        # Initialize new trading day
-        self._initialize_day()
-    
-    def _initialize_day(self):
-        """Initialize a new trading day"""
-        today = datetime.utcnow().date()
-        self.session_start = datetime(today.year, today.month, today.day, 0, 0, 0)
         self.daily_trades = 0
-        self.daily_profit = 0.0
-        self.daily_loss = 0.0
-        self.trade_counter = 0
-    
-    def _check_new_day(self) -> bool:
-        """Check if it's a new trading day"""
-        today = datetime.utcnow().date()
-        session_date = self.session_start.date() if self.session_start else None
-        
-        if session_date != today:
-            self._initialize_day()
-            return True
-        return False
-    
-    def _generate_signal_id(self) -> str:
-        """Generate unique signal ID"""
-        self.trade_counter += 1
-        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
-        return f"SIG_{timestamp}_{self.trade_counter}"
-    
-    def _generate_trade_id(self) -> str:
-        """Generate unique trade ID"""
-        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
-        return f"TRADE_{timestamp}_{self.trade_counter}"
-    
-    def _can_trade(self) -> bool:
-        """Check if we can open a new trade"""
-        self._check_new_day()
-        
-        # Check daily limit
-        if self.daily_trades >= config.trading.DAILY_TRADES_LIMIT:
-            logger.info(f"Daily trade limit reached ({self.daily_trades}/{config.trading.DAILY_TRADES_LIMIT})")
-            return False
-        
-        # Check max open trades
-        if len(self.open_trades) >= config.risk.MAX_OPEN_TRADES:
-            logger.info(f"Max open trades reached ({len(self.open_trades)}/{config.risk.MAX_OPEN_TRADES})")
-            return False
-        
-        # Check daily loss limit
-        if abs(self.daily_loss) >= config.risk.MAX_DAILY_LOSS:
-            logger.warning(f"Daily loss limit reached ({self.daily_loss:.2f})")
-            return False
-        
-        return True
-    
-    def _calculate_stop_loss_take_profit(
-        self, 
-        entry_price: float, 
-        direction: TradeDirection,
-        atr: float = None
-    ) -> Tuple[float, float]:
-        """Calculate stop loss and take profit levels"""
-        if atr is None:
-            atr = 50  # Default ATR value for XAUUSD
-        
-        # Use ATR-based stop loss
-        stop_distance = atr * 1.5
-        take_profit_distance = atr * 3.0  # 1:3 risk-reward ratio
-        
+        self.current_day = date.today()
+        self.detector = pattern_detector
+        self.analyzer = technical_analyzer
+        self.cfg = config.trading
+        self.sig_cfg = config.signal
+
+    def _check_new_day(self):
+        today = date.today()
+        if today != self.current_day:
+            self.daily_trades = 0
+            self.current_day = today
+            logger.info("New trading day - counters reset")
+
+    def _calc_sl_tp(self, direction: TradeDirection, entry: float, atr: float) -> tuple:
+        sl_dist = max(self.cfg.DEFAULT_STOP_LOSS * 0.1, atr * 1.1)
+        tp_dist = max(self.cfg.DEFAULT_TAKE_PROFIT * 0.1, atr * 2.2)
         if direction == TradeDirection.BUY:
-            stop_loss = entry_price - stop_distance
-            take_profit = entry_price + take_profit_distance
-        else:  # SELL
-            stop_loss = entry_price + stop_distance
-            take_profit = entry_price - take_profit_distance
-        
-        return stop_loss, take_profit
-    
-    def _evaluate_signal_strength(
-        self, 
-        analysis: AnalysisResult,
-        patterns: Dict[PatternType, List[Any]]
-    ) -> Tuple[bool, float, str]:
-        """Evaluate if we should generate a signal and its strength"""
-        signal = analysis.overall_signal
-        confidence = analysis.signal_confidence
-        strength = analysis.signal_strength
-        
-        # Minimum requirements
-        if confidence < config.signal.SIGNAL_CONFIDENCE_THRESHOLD:
-            return False, 0.0, "Low confidence"
-        
-        if strength < config.signal.MIN_SIGNAL_STRENGTH:
-            return False, 0.0, "Low strength"
-        
-        # Check for confirmation across multiple timeframes
-        if config.signal.CONFIRMATION_REQUIRED:
-            # This would be checked in the main analysis loop
-            pass
-        
-        # Boost strength based on patterns
-        pattern_boost = 0.0
-        pattern_reasons = []
-        
-        # Check for strong patterns
-        strong_patterns = [
-            PatternType.HEAD_AND_SHOULDERS,
-            PatternType.INVERSE_HEAD_AND_SHOULDERS,
-            PatternType.DOUBLE_TOP,
-            PatternType.DOUBLE_BOTTOM,
-            PatternType.TRIPLE_TOP,
-            PatternType.TRIPLE_BOTTOM,
-            PatternType.TRENDLINE_BREAK,
-            PatternType.BREAKOUT_UP,
-            PatternType.BREAKOUT_DOWN
-        ]
-        
-        for pattern_type in strong_patterns:
-            if pattern_type in patterns and patterns[pattern_type]:
-                latest_pattern = patterns[pattern_type][0]
-                pattern_boost += latest_pattern.strength * 0.2
-                pattern_reasons.append(latest_pattern.name)
-        
-        # Check for volume confirmation
-        if analysis.volume_spike:
-            pattern_boost += 0.15
-            pattern_reasons.append("Volume Spike")
-        
-        # Check for breakouts
-        if analysis.breakout_upper or analysis.breakout_lower:
-            pattern_boost += 0.2
-            pattern_reasons.append("Breakout")
-        
-        # Check for trend confirmation
-        if (analysis.short_term_trend and analysis.medium_term_trend and
-            analysis.short_term_trend.direction == analysis.medium_term_trend.direction):
-            pattern_boost += 0.1
-            pattern_reasons.append("Trend Confirmation")
-        
-        total_strength = min(strength + pattern_boost, 1.0)
-        
-        # Build reason
-        signal_word = signal.value.replace("_", " ")
-        reason = f"{signal_word} signal"
-        if pattern_reasons:
-            reason += f" with {', '.join(pattern_reasons)}"
-        
-        # Only generate signal for BUY or SELL (not NEUTRAL or WEAK)
-        if signal in [SignalType.STRONG_BUY, SignalType.BUY, 
-                      SignalType.STRONG_SELL, SignalType.SELL]:
-            return True, total_strength, reason
-        
-        return False, 0.0, "Neutral signal"
-    
-    def _generate_signal(
-        self, 
-        analysis: AnalysisResult,
-        patterns: Dict[PatternType, List[Any]],
-        current_price: float
+            return entry - sl_dist, entry + tp_dist
+        return entry + sl_dist, entry - tp_dist
+
+    def generate_signal(
+        self,
+        candles_1m: List[Candle],
+        analysis_1m: AnalysisResult,
+        current_price: float,
+        multi_tf_patterns: Dict[str, List] = None
     ) -> Optional[TradeSignal]:
-        """Generate a trading signal based on analysis"""
-        should_trade, strength, reason = self._evaluate_signal_strength(analysis, patterns)
-        
-        if not should_trade:
+        self._check_new_day()
+        if self.daily_trades >= self.cfg.DAILY_TRADES_LIMIT:
+            logger.debug("Daily trade limit reached")
             return None
-        
-        # Determine direction
-        signal_type = analysis.overall_signal
-        if signal_type in [SignalType.STRONG_BUY, SignalType.BUY]:
+        if len(self.open_trades) >= config.risk.MAX_OPEN_TRADES:
+            return None
+        if len(candles_1m) < 30:
+            return None
+
+        candle_score_data = self.detector.get_directional_score(candles_1m)
+        candle_buy = candle_score_data["buy_score"]
+        candle_sell = candle_score_data["sell_score"]
+        best_patterns = candle_score_data.get("patterns", [])
+
+        ind_score_data = self.analyzer.get_indicator_score(analysis_1m)
+        ind_buy = ind_score_data["buy_score"]
+        ind_sell = ind_score_data["sell_score"]
+
+        w_c = self.sig_cfg.CANDLE_PATTERN_WEIGHT
+        w_i = self.sig_cfg.INDICATOR_WEIGHT
+        final_buy = candle_buy * w_c + ind_buy * w_i
+        final_sell = candle_sell * w_c + ind_sell * w_i
+
+        if analysis_1m.volume_ratio > 1.6:
+            if final_buy > final_sell:
+                final_buy *= 1.15
+            else:
+                final_sell *= 1.15
+
+        if final_buy > final_sell and final_buy >= self.cfg.MIN_SIGNAL_STRENGTH:
             direction = TradeDirection.BUY
-        elif signal_type in [SignalType.STRONG_SELL, SignalType.SELL]:
+            strength = min(0.98, final_buy)
+            confidence = min(0.95, (candle_buy + ind_buy) / 2 + 0.15)
+        elif final_sell > final_buy and final_sell >= self.cfg.MIN_SIGNAL_STRENGTH:
             direction = TradeDirection.SELL
+            strength = min(0.98, final_sell)
+            confidence = min(0.95, (candle_sell + ind_sell) / 2 + 0.15)
         else:
             return None
-        
-        # Get ATR for stop loss calculation
-        atr = None
-        if "ATR" in analysis.indicators:
-            atr = analysis.indicators["ATR"].value
-        
-        # Calculate stop loss and take profit
-        stop_loss, take_profit = self._calculate_stop_loss_take_profit(
-            current_price, direction, atr
-        )
-        
-        # Adjust based on signal strength
-        if strength > 0.8:
-            # Strong signal - wider take profit
-            if direction == TradeDirection.BUY:
-                take_profit = current_price + (take_profit - current_price) * 1.5
-            else:
-                take_profit = current_price - (current_price - take_profit) * 1.5
-        
-        # Collect indicator values
-        indicators = {}
-        for name, value in analysis.indicators.items():
-            if name in ["RSI", "MACD", "MACD_Signal", "MACD_Histogram", 
-                       "Stochastic_K", "Stochastic_D", "ATR"]:
-                indicators[name] = value.value
-        
-        # Collect pattern names
-        pattern_names = []
-        for pattern_type, pattern_list in patterns.items():
-            if pattern_list:
-                pattern_names.append(pattern_list[0].name)
-        
-        # Create signal
+
+        if confidence < self.cfg.MIN_CONFIDENCE:
+            return None
+
+        pattern_names = [p.get("name_ar") or p.get("name") for p in best_patterns[:3]]
+        reason_parts = []
+        if pattern_names:
+            reason_parts.append(f"\u0634\u0645\u0648\u0639 \u064a\u0627\u0628\u0627\u0646\u064a\u0629: {', '.join(pattern_names)}")
+        if analysis_1m.trend != "NEUTRAL":
+            reason_parts.append(f"\u0627\u062a\u062c\u0627\u0647 {analysis_1m.trend}")
+        if analysis_1m.rsi < 35:
+            reason_parts.append(f"RSI \u0645\u0634\u062a\u0631\u0649 ({analysis_1m.rsi:.1f})")
+        elif analysis_1m.rsi > 65:
+            reason_parts.append(f"RSI \u0645\u0628\u064a\u0639 ({analysis_1m.rsi:.1f})")
+        if analysis_1m.volume_ratio > 1.5:
+            reason_parts.append(f"\u062d\u062c\u0645 \u0645\u0631\u062a\u0641\u0639 \u00d7{analysis_1m.volume_ratio:.1f}")
+        reason = " | ".join(reason_parts) if reason_parts else "\u062a\u062d\u0644\u064a\u0644 \u0630\u0643\u064a \u0645\u062a\u0639\u062f\u062f \u0627\u0644\u0639\u0648\u0627\u0645\u0644"
+
+        sl, tp = self._calc_sl_tp(direction, current_price, analysis_1m.atr or 1.5)
+
         signal = TradeSignal(
-            signal_id=self._generate_signal_id(),
+            signal_id=str(uuid.uuid4())[:12],
             timestamp=datetime.utcnow(),
             direction=direction,
             entry_price=current_price,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            confidence=analysis.signal_confidence,
+            stop_loss=round(sl, 5),
+            take_profit=round(tp, 5),
+            confidence=confidence,
             strength=strength,
             reason=reason,
-            indicators=indicators,
-            patterns=pattern_names,
-            timeframe=analysis.timeframe,
+            indicators={
+                "rsi": analysis_1m.rsi,
+                "macd_hist": analysis_1m.macd_hist,
+                "atr": analysis_1m.atr,
+                "trend": analysis_1m.trend,
+                "volume_ratio": analysis_1m.volume_ratio,
+                "stoch_k": analysis_1m.stoch_k
+            },
+            patterns=[p.get("name", "") for p in best_patterns[:4]],
+            timeframe="1m",
             risk_percent=config.risk.MAX_TRADE_RISK_PERCENT,
-            lot_size=config.trading.LOT_SIZE
+            lot_size=self.cfg.LOT_SIZE,
+            candle_score=candle_buy if direction == TradeDirection.BUY else candle_sell,
+            indicator_score=ind_buy if direction == TradeDirection.BUY else ind_sell
         )
-        
+        logger.info(f"Signal generated: {direction.value} strength={strength:.2f} conf={confidence:.2f} | {reason}")
         return signal
-    
-    def _execute_signal(self, signal: TradeSignal) -> Optional[Trade]:
-        """Execute a trading signal"""
-        if not self._can_trade():
-            logger.info(f"Cannot execute signal {signal.signal_id}: trading limits reached")
-            return None
-        
-        # Create trade
+
+    def execute_signal(self, signal: TradeSignal) -> Optional[Trade]:
         trade = Trade(
-            trade_id=self._generate_trade_id(),
+            trade_id=str(uuid.uuid4())[:10],
             signal_id=signal.signal_id,
             direction=signal.direction,
             entry_price=signal.entry_price,
@@ -423,224 +244,72 @@ class ScalpingStrategy:
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
             lot_size=signal.lot_size,
-            status=TradeStatus.OPEN
+            reason=signal.reason,
+            patterns=signal.patterns,
+            highest_price=signal.entry_price,
+            lowest_price=signal.entry_price
         )
-        
         self.open_trades.append(trade)
         self.daily_trades += 1
-        
-        logger.info(f"Executed trade {trade.trade_id}: {signal.direction.value} at {signal.entry_price}")
-        
+        logger.info(f"Trade opened: {trade.trade_id} {trade.direction.value} @ {trade.entry_price}")
         return trade
-    
-    def _check_trade_exit(self, trade: Trade, current_price: float) -> bool:
-        """Check if a trade should be exited"""
+
+    def check_exit(self, trade: Trade, current_price: float) -> bool:
         if trade.status != TradeStatus.OPEN:
             return False
-        
-        # Check stop loss
-        if (trade.direction == TradeDirection.BUY and current_price <= trade.stop_loss) or \
-           (trade.direction == TradeDirection.SELL and current_price >= trade.stop_loss):
-            trade.exit_price = current_price
-            trade.exit_time = datetime.utcnow()
-            trade.exit_reason = "Stop Loss"
-            trade.profit, trade.profit_percent = trade.calculate_profit(current_price)
-            trade.status = TradeStatus.CLOSED
-            
-            self.daily_loss += trade.profit if trade.profit < 0 else 0
-            self.daily_profit += trade.profit if trade.profit > 0 else 0
-            
-            self.open_trades.remove(trade)
-            self.closed_trades.append(trade)
-            
-            logger.info(f"Trade {trade.trade_id} exited at SL: {current_price}, P&L: {trade.profit:.2f}")
-            return True
-        
-        # Check take profit
-        if (trade.direction == TradeDirection.BUY and current_price >= trade.take_profit) or \
-           (trade.direction == TradeDirection.SELL and current_price <= trade.take_profit):
-            trade.exit_price = current_price
-            trade.exit_time = datetime.utcnow()
-            trade.exit_reason = "Take Profit"
-            trade.profit, trade.profit_percent = trade.calculate_profit(current_price)
-            trade.status = TradeStatus.CLOSED
-            
-            self.daily_profit += trade.profit
-            
-            self.open_trades.remove(trade)
-            self.closed_trades.append(trade)
-            
-            logger.info(f"Trade {trade.trade_id} exited at TP: {current_price}, P&L: {trade.profit:.2f}")
-            return True
-        
-        return False
-    
-    def _check_trailing_stop(self, trade: Trade, current_price: float) -> bool:
-        """Check and update trailing stop"""
-        if not config.trading.TRAILING_STOP:
-            return False
-        
-        if trade.direction == TradeDirection.BUY:
-            # Update trailing stop if price moves up
-            if current_price > trade.entry_price + config.trading.TRAILING_STOP_DISTANCE:
-                new_stop = current_price - config.trading.TRAILING_STOP_DISTANCE
-                if new_stop > trade.stop_loss:
-                    trade.stop_loss = new_stop
-                    logger.debug(f"Trailing stop updated for {trade.trade_id}: {new_stop}")
-        
-        elif trade.direction == TradeDirection.SELL:
-            # Update trailing stop if price moves down
-            if current_price < trade.entry_price - config.trading.TRAILING_STOP_DISTANCE:
-                new_stop = current_price + config.trading.TRAILING_STOP_DISTANCE
-                if new_stop < trade.stop_loss:
-                    trade.stop_loss = new_stop
-                    logger.debug(f"Trailing stop updated for {trade.trade_id}: {new_stop}")
-        
-        return False
-    
-    async def analyze_and_trade(
-        self, 
-        candles: List[Candle], 
-        current_price: MarketData
-    ) -> Tuple[Optional[TradeSignal], List[Trade]]:
-        """Analyze market and generate trades"""
-        signals = []
-        executed_trades = []
-        
-        # Analyze current market
-        analysis = self.analyzer.analyze(candles, "1m")
-        
-        # Detect patterns
-        patterns = self.pattern_detector.detect_all_patterns(candles)
-        
-        # Generate signal
-        signal = self._generate_signal(analysis, patterns, current_price.bid)
-        
-        if signal:
-            signals.append(signal)
-            
-            # Execute signal
-            trade = self._execute_signal(signal)
-            if trade:
-                executed_trades.append(trade)
-        
-        # Check existing trades for exit
-        closed_trades = []
-        for trade in self.open_trades[:]:  # Iterate over a copy
-            if self._check_trade_exit(trade, current_price.bid):
-                closed_trades.append(trade)
+
+        if current_price > trade.highest_price:
+            trade.highest_price = current_price
+        if current_price < trade.lowest_price:
+            trade.lowest_price = current_price
+
+        if self.cfg.TRAILING_STOP:
+            dist = self.cfg.TRAILING_STOP_DISTANCE * 0.1
+            if trade.direction == TradeDirection.BUY:
+                if current_price - trade.entry_price > dist * 1.5:
+                    new_sl = current_price - dist
+                    if new_sl > trade.stop_loss:
+                        trade.stop_loss = new_sl
+                        trade.trailing_activated = True
             else:
-                self._check_trailing_stop(trade, current_price.bid)
-        
-        return signal, executed_trades + closed_trades
-    
-    async def run_scalping_cycle(
-        self, 
-        client: BIQuoteClient
-    ) -> Dict[str, Any]:
-        """Run a complete scalping cycle"""
-        try:
-            # Fetch data
-            candles = await client.get_historical_candles("1m", 200)
-            current_price = await client.get_current_price()
-            
-            if not candles or len(candles) < 50:
-                return {"status": "error", "message": "Insufficient data"}
-            
-            # Analyze and trade
-            signal, trades = await self.analyze_and_trade(candles, current_price)
-            
-            result = {
-                "status": "success",
-                "timestamp": datetime.utcnow().isoformat(),
-                "current_price": current_price.bid,
-                "trades_executed": len([t for t in trades if t.status == TradeStatus.OPEN]),
-                "trades_closed": len([t for t in trades if t.status == TradeStatus.CLOSED]),
-                "daily_trades": self.daily_trades,
-                "daily_profit": self.daily_profit,
-                "open_trades": len(self.open_trades),
-                "signal": signal.to_dict() if signal else None
-            }
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Scalping cycle failed: {e}")
-            return {"status": "error", "message": str(e)}
-    
-    def get_trade_summary(self) -> Dict[str, Any]:
-        """Get summary of current trading session"""
-        total_profit = sum(t.profit for t in self.closed_trades if t.profit is not None)
-        winning_trades = sum(1 for t in self.closed_trades if t.profit is not None and t.profit > 0)
-        losing_trades = sum(1 for t in self.closed_trades if t.profit is not None and t.profit < 0)
-        
-        return {
-            "session_start": self.session_start.isoformat() if self.session_start else None,
-            "daily_trades": self.daily_trades,
-            "max_daily_trades": config.trading.DAILY_TRADES_LIMIT,
-            "open_trades": len(self.open_trades),
-            "closed_trades": len(self.closed_trades),
-            "total_profit": total_profit,
-            "daily_profit": self.daily_profit,
-            "daily_loss": self.daily_loss,
-            "winning_trades": winning_trades,
-            "losing_trades": losing_trades,
-            "win_rate": winning_trades / (winning_trades + losing_trades) if (winning_trades + losing_trades) > 0 else 0
-        }
-    
-    def close_all_trades(self, exit_price: float) -> List[Trade]:
-        """Close all open trades at a specific price"""
-        closed = []
-        for trade in self.open_trades[:]:
-            trade.exit_price = exit_price
+                if trade.entry_price - current_price > dist * 1.5:
+                    new_sl = current_price + dist
+                    if new_sl < trade.stop_loss:
+                        trade.stop_loss = new_sl
+                        trade.trailing_activated = True
+
+        hit_sl = False
+        hit_tp = False
+        if trade.direction == TradeDirection.BUY:
+            hit_sl = current_price <= trade.stop_loss
+            hit_tp = current_price >= trade.take_profit
+        else:
+            hit_sl = current_price >= trade.stop_loss
+            hit_tp = current_price <= trade.take_profit
+
+        if hit_sl or hit_tp:
+            trade.exit_price = current_price
             trade.exit_time = datetime.utcnow()
-            trade.exit_reason = "Manual Close"
-            trade.profit, trade.profit_percent = trade.calculate_profit(exit_price)
             trade.status = TradeStatus.CLOSED
-            
-            self.daily_profit += trade.profit if trade.profit > 0 else 0
-            self.daily_loss += trade.profit if trade.profit < 0 else 0
-            
+            if trade.direction == TradeDirection.BUY:
+                trade.profit = (current_price - trade.entry_price) * trade.lot_size * 100
+            else:
+                trade.profit = (trade.entry_price - current_price) * trade.lot_size * 100
+            trade.profit_percent = (trade.profit / (trade.entry_price * trade.lot_size)) * 100 if trade.entry_price else 0
+            trade.exit_reason = "Take Profit" if hit_tp else "Stop Loss"
+            if trade.trailing_activated and hit_sl:
+                trade.exit_reason = "Trailing Stop"
             self.open_trades.remove(trade)
             self.closed_trades.append(trade)
-            closed.append(trade)
-        
-        return closed
+            logger.info(f"Trade closed: {trade.trade_id} {trade.exit_reason} P/L={trade.profit:.2f}")
+            return True
+        return False
+
+    def get_open_trades_dict(self) -> List[Dict]:
+        return [t.to_dict() for t in self.open_trades]
+
+    def get_closed_trades_dict(self, limit: int = 50) -> List[Dict]:
+        return [t.to_dict() for t in self.closed_trades[-limit:]]
 
 
-# Global instance
 scalping_strategy = ScalpingStrategy()
-
-
-if __name__ == "__main__":
-    import asyncio
-    
-    async def test():
-        strategy = ScalpingStrategy()
-        
-        async with BIQuoteClient() as client:
-            # Run a few cycles
-            for i in range(5):
-                result = await strategy.run_scalping_cycle(client)
-                print(f"\nCycle {i+1}:")
-                print(f"  Status: {result['status']}")
-                print(f"  Price: {result['current_price']}")
-                print(f"  Trades Executed: {result['trades_executed']}")
-                print(f"  Daily Trades: {result['daily_trades']}/{config.trading.DAILY_TRADES_LIMIT}")
-                
-                if result.get('signal'):
-                    signal = result['signal']
-                    print(f"  Signal: {signal['direction']} at {signal['entry_price']}")
-                    print(f"    SL: {signal['stop_loss']}, TP: {signal['take_profit']}")
-                    print(f"    Reason: {signal['reason']}")
-                
-                # Small delay
-                await asyncio.sleep(1)
-            
-            # Print summary
-            summary = strategy.get_trade_summary()
-            print("\nTrading Summary:")
-            for key, value in summary.items():
-                print(f"  {key}: {value}")
-    
-    asyncio.run(test())
