@@ -1,11 +1,9 @@
 """
 Aggressive Scalping Strategy
-- 1 open trade only
-- TP1 / TP2 / TP3 with partial management
-- Max 50 min if losing, unlimited if winning
-- Analyze last 20 candles for entry
-- OHLC high/low for TP/SL (no missed targets)
-- Persist trades to disk (survive Render restart)
+- Wider SL (+1) and TP (+2)
+- No exit for 45s after entry (prevent same-candle stop)
+- Block BUY when RSI > 75
+- 1 open trade, TP1/TP2/TP3, persist trades
 """
 
 import logging
@@ -169,10 +167,11 @@ class ScalpingStrategy:
 
     def _calc_sl_tp(self, direction: TradeDirection, entry: float, atr: float) -> Tuple[float, float, float, float]:
         atr = max(atr or 1.5, 0.8)
-        sl_dist = max(3.0, atr * 1.15)
-        tp1_dist = max(2.0, atr * 0.9)
-        tp2_dist = max(4.0, atr * 1.8)
-        tp3_dist = max(6.0, atr * 2.8)
+        # Wider: SL +1$, TP +2$
+        sl_dist = max(4.0, atr * 1.3) + 1.0
+        tp1_dist = max(3.5, atr * 1.1) + 2.0
+        tp2_dist = max(5.5, atr * 2.0) + 2.0
+        tp3_dist = max(8.0, atr * 3.0) + 2.0
         if direction == TradeDirection.BUY:
             return round(entry - sl_dist, 3), round(entry + tp1_dist, 3), round(entry + tp2_dist, 3), round(entry + tp3_dist, 3)
         return round(entry + sl_dist, 3), round(entry - tp1_dist, 3), round(entry - tp2_dist, 3), round(entry - tp3_dist, 3)
@@ -221,12 +220,19 @@ class ScalpingStrategy:
         if confidence < self.cfg.MIN_CONFIDENCE:
             return None
 
+        # Avoid chasing extremes
+        if direction == TradeDirection.BUY and analysis_1m.rsi > 75:
+            logger.info(f"Skip BUY - RSI overbought {analysis_1m.rsi:.1f}")
+            return None
+        if direction == TradeDirection.SELL and analysis_1m.rsi < 25:
+            logger.info(f"Skip SELL - RSI oversold {analysis_1m.rsi:.1f}")
+            return None
+
         score = int(min(99, max(50, strength * 100)))
         pattern_name = ""
         if best_patterns:
             pattern_name = best_patterns[0].get("name") or best_patterns[0].get("name_ar") or ""
 
-        # Reject strong conflict (e.g. Gravestone Doji for BUY)
         bearish_names = ("gravestone", "shooting star", "evening star", "bearish engul", "hanging man", "dark cloud")
         bullish_names = ("hammer", "morning star", "bullish engul", "dragonfly", "inverted hammer", "piercing")
         pname = (pattern_name or "").lower()
@@ -284,7 +290,7 @@ class ScalpingStrategy:
             candle_score=candle_buy if direction == TradeDirection.BUY else candle_sell,
             indicator_score=ind_buy if direction == TradeDirection.BUY else ind_sell,
         )
-        logger.info(f"Signal: {direction.value} score={score} entry={current_price:.2f} | {pattern_name}")
+        logger.info(f"Signal: {direction.value} score={score} entry={current_price:.2f} SL={sl} TP1={tp1} | {pattern_name}")
         return signal
 
     def execute_signal(self, signal: TradeSignal) -> Optional[Trade]:
@@ -320,8 +326,12 @@ class ScalpingStrategy:
         bar_high: float = None,
         bar_low: float = None,
     ) -> Tuple[bool, list]:
-        """Returns (closed, events_list). Uses bar high/low so TP/SL not missed on wicks."""
         if trade.status != TradeStatus.OPEN:
+            return False, []
+
+        # Prevent same-candle stop-out right after entry
+        age_sec = (datetime.utcnow() - trade.entry_time).total_seconds()
+        if age_sec < 45:
             return False, []
 
         hi = bar_high if bar_high is not None else current_price
@@ -335,7 +345,7 @@ class ScalpingStrategy:
         events = []
         is_buy = trade.direction == TradeDirection.BUY
 
-        age_min = (datetime.utcnow() - trade.entry_time).total_seconds() / 60
+        age_min = age_sec / 60
         floating = (current_price - trade.entry_price) if is_buy else (trade.entry_price - current_price)
         if age_min >= self.MAX_LOSS_DURATION_MIN and floating < 0:
             trade.exit_price = current_price
@@ -353,7 +363,7 @@ class ScalpingStrategy:
             hit_tp1 = (hi >= trade.tp1) if is_buy else (lo <= trade.tp1)
             if hit_tp1:
                 trade.tp1_hit = True
-                be = trade.entry_price + (0.15 if is_buy else -0.15)
+                be = trade.entry_price + (0.8 if is_buy else -0.8)
                 trade.stop_loss = round(be, 3)
                 trade.be_moved = True
                 events.append("TP1")
@@ -363,7 +373,7 @@ class ScalpingStrategy:
             hit_tp2 = (hi >= trade.tp2) if is_buy else (lo <= trade.tp2)
             if hit_tp2:
                 trade.tp2_hit = True
-                new_sl = trade.tp1 + (0.2 if is_buy else -0.2)
+                new_sl = trade.tp1 + (0.5 if is_buy else -0.5)
                 if is_buy and new_sl > trade.stop_loss:
                     trade.stop_loss = round(new_sl, 3)
                 elif not is_buy and new_sl < trade.stop_loss:
