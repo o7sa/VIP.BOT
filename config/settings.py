@@ -9,7 +9,7 @@ from typing import List, Optional
 
 
 # ============================================================
-#  🔑 ضع توكن التليجرام والآي دي هنا مباشرة (بدون متغيرات بيئة)
+#  TELEGRAM - put token and IDs here
 # ============================================================
 TELEGRAM_BOT_TOKEN = "8976865494:AAEoEOA17SLSQf1V8SrFvYE31NgPZOGuEs0"
 TELEGRAM_CHANNEL_ID = "@PQYNC"
@@ -67,7 +67,7 @@ class TechnicalAnalysisConfig:
 class RiskManagementConfig:
     MAX_DAILY_LOSS: float = 0.12
     MAX_DAILY_PROFIT: float = 0.25
-    MAX_OPEN_TRADES: int = 6
+    MAX_OPEN_TRADES: int = 1   # one trade only
     MAX_TRADE_RISK_PERCENT: float = 0.02
     MAX_DRAWDOWN: float = 0.18
     STOP_TRADING_AT_DRAWDOWN: float = 0.14
@@ -103,8 +103,8 @@ class AppConfig:
     LOG_LEVEL: str = "INFO"
     DATA_STORE_DAYS: int = 30
     CACHE_ENABLED: bool = True
-    CACHE_TTL: int = 2              # cache price/candles for 2 seconds only
-    BOT_LOOP_INTERVAL: float = 5.0  # analysis cycle every 5 seconds (faster)
+    CACHE_TTL: int = 2
+    BOT_LOOP_INTERVAL: float = 5.0
 
 
 class Config:
