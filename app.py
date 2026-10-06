@@ -101,21 +101,22 @@ class VIPBotEngine:
                 logger.error(f"Candles fetch failed: {e}")
                 return
 
-            if len(candles) < 30:
+            if len(candles) < 15:
                 logger.warning("Not enough candles")
                 return
 
             analysis = technical_analyzer.analyze(candles, "1m")
-            patterns = pattern_detector.detect_all_patterns(candles)
+            patterns = pattern_detector.detect_all_patterns(candles[-15:])
             self.latest_patterns = [p.to_dict() for p in patterns[:6]]
 
+            # Check open trades (TP1/TP2/TP3/BE/SL/TIME)
             for trade in list(scalping_strategy.open_trades):
-                closed = scalping_strategy.check_exit(trade, current)
+                closed, event = scalping_strategy.check_exit(trade, current)
+                if event and telegram_sender.is_configured:
+                    async with telegram_sender as tg:
+                        await tg.send_trade_closed(trade, event=event)
                 if closed:
                     risk_manager.record_trade(trade)
-                    if telegram_sender.is_configured:
-                        async with telegram_sender as tg:
-                            await tg.send_trade_closed(trade)
 
             risk_manager.update_open_trades(scalping_strategy.open_trades)
 
@@ -126,7 +127,6 @@ class VIPBotEngine:
                 if executed and telegram_sender.is_configured:
                     async with telegram_sender as tg:
                         await tg.send_signal(signal)
-                        await tg.send_trade_opened(executed)
 
             elapsed = (datetime.utcnow() - start).total_seconds()
             result.update({
@@ -201,7 +201,6 @@ if os.path.isdir("static"):
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     try:
-        # Correct Starlette signature: TemplateResponse(request, name, context)
         return templates.TemplateResponse(request, "dashboard.html", {"request": request})
     except TypeError:
         try:
@@ -210,7 +209,7 @@ async def dashboard(request: Request):
             logger.error(f"Dashboard template error: {e2}", exc_info=True)
             return HTMLResponse(
                 content=f"<html><body style='background:#0f0c29;color:#fff;font-family:sans-serif;text-align:center;padding:40px'>"
-                        f"<h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>\u062d\u0627\u0644\u0629 \u0627\u0644\u0628\u0648\u062a</a></p>"
+                        f"<h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p>"
                         f"<pre>{e2}</pre></body></html>",
                 status_code=200
             )
@@ -218,7 +217,7 @@ async def dashboard(request: Request):
         logger.error(f"Dashboard template error: {e}", exc_info=True)
         return HTMLResponse(
             content=f"<html><body style='background:#0f0c29;color:#fff;font-family:sans-serif;text-align:center;padding:40px'>"
-                    f"<h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>\u062d\u0627\u0644\u0629 \u0627\u0644\u0628\u0648\u062a</a></p>"
+                    f"<h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p>"
                     f"<pre>{e}</pre></body></html>",
             status_code=200
         )
@@ -258,13 +257,7 @@ async def api_stop():
 def main():
     port = config.web.PORT
     logger.info(f"Starting server on 0.0.0.0:{port}")
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-        access_log=False
-    )
+    uvicorn.run("app:app", host="0.0.0.0", port=port, log_level="info", access_log=False)
 
 
 if __name__ == "__main__":
