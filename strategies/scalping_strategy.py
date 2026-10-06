@@ -3,7 +3,7 @@ Aggressive Scalping Strategy
 - 1 open trade only
 - TP1 / TP2 / TP3 with partial management
 - Max 50 min if losing, unlimited if winning
-- Analyze last 15 candles for entry
+- Analyze last 20 candles for entry
 """
 
 import logging
@@ -176,10 +176,11 @@ class ScalpingStrategy:
             return None
         if len(self.open_trades) >= 1:
             return None
-        if len(candles_1m) < 15:
+        if len(candles_1m) < 20:
             return None
 
-        recent = candles_1m[-15:]
+        # Analyze LAST 20 candles for entry
+        recent = candles_1m[-20:]
         candle_score_data = self.detector.get_directional_score(recent)
         candle_buy = candle_score_data["buy_score"]
         candle_sell = candle_score_data["sell_score"]
@@ -230,7 +231,7 @@ class ScalpingStrategy:
             reason_parts.append(f"RSI \u0645\u0634\u062a\u0631\u0649 ({analysis_1m.rsi:.1f})")
         elif analysis_1m.rsi > 65:
             reason_parts.append(f"RSI \u0645\u0628\u064a\u0639 ({analysis_1m.rsi:.1f})")
-        reason = " | ".join(reason_parts) if reason_parts else "\u062a\u062d\u0644\u064a\u0644 \u0630\u0643\u064a 15 \u0634\u0645\u0639\u0629"
+        reason = " | ".join(reason_parts) if reason_parts else "\u062a\u062d\u0644\u064a\u0644 \u0630\u0643\u064a 20 \u0634\u0645\u0639\u0629"
 
         sl, tp1, tp2, tp3 = self._calc_sl_tp(direction, current_price, analysis_1m.atr or 1.5)
 
