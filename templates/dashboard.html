@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VIP.BOT | XAUUSD Glass Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --glass-bg: rgba(255, 255, 255, 0.08);
+            --glass-border: rgba(255, 255, 255, 0.18);
+            --accent: #00d4aa;
+            --accent2: #7b61ff;
+            --danger: #ff4757;
+            --warning: #ffa502;
+            --text: #f0f4f8;
+            --muted: #a0aec0;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Cairo', sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            min-height: 100vh;
+            color: var(--text);
+            overflow-x: hidden;
+        }
+        .bg-orbs { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+        .orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.4; }
+        .orb1 { width: 400px; height: 400px; background: #7b61ff; top: -100px; right: -100px; }
+        .orb2 { width: 350px; height: 350px; background: #00d4aa; bottom: -80px; left: -80px; }
+        .orb3 { width: 250px; height: 250px; background: #ff6b6b; top: 40%; left: 30%; }
+        .container { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; padding: 24px; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; flex-wrap: wrap; gap: 16px; }
+        .logo { font-size: 1.8rem; font-weight: 700; background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .status-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 50px; background: var(--glass-bg); border: 1px solid var(--glass-border); backdrop-filter: blur(12px); font-size: 0.9rem; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 24px; }
+        .glass { background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 20px; backdrop-filter: blur(16px); padding: 22px; box-shadow: 0 8px 32px rgba(0,0,0,0.25); transition: transform 0.25s; }
+        .glass:hover { transform: translateY(-4px); }
+        .card-title { font-size: 0.85rem; color: var(--muted); margin-bottom: 8px; }
+        .card-value { font-size: 1.9rem; font-weight: 700; }
+        .price-up { color: var(--accent); }
+        .price-down { color: var(--danger); }
+        .sub { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+        .section-title { font-size: 1.15rem; font-weight: 600; margin: 28px 0 14px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px 10px; text-align: right; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.9rem; }
+        th { color: var(--muted); font-weight: 500; font-size: 0.8rem; }
+        .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+        .badge-buy { background: rgba(0,212,170,0.2); color: var(--accent); }
+        .badge-sell { background: rgba(255,71,87,0.2); color: var(--danger); }
+        .badge-open { background: rgba(123,97,255,0.2); color: #b794f4; }
+        .profit-pos { color: var(--accent); }
+        .profit-neg { color: var(--danger); }
+        .reason-cell { max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 0.82rem; }
+        .empty { text-align: center; padding: 40px; color: var(--muted); }
+        footer { text-align: center; padding: 30px 0 10px; color: var(--muted); font-size: 0.8rem; }
+    </style>
+</head>
+<body>
+    <div class="bg-orbs"><div class="orb orb1"></div><div class="orb orb2"></div><div class="orb orb3"></div></div>
+    <div class="container">
+        <header>
+            <div class="logo">VIP.BOT</div>
+            <div class="status-badge"><span class="dot" id="statusDot"></span><span id="botStatus">\u062c\u0627\u0631\u064a \u0627\u0644\u062a\u062d\u0645\u064a\u0644...</span></div>
+        </header>
+        <div class="grid">
+            <div class="glass"><div class="card-title">\u0633\u0639\u0631 XAUUSD \u0627\u0644\u062d\u064a</div><div class="card-value" id="price">\u2014</div><div class="sub" id="spread">\u0633\u0628\u0631\u064a\u062f: \u2014</div></div>
+            <div class="glass"><div class="card-title">\u0627\u0644\u0635\u0641\u0642\u0627\u062a \u0627\u0644\u0645\u0641\u062a\u0648\u062d\u0629</div><div class="card-value" id="openCount">0</div><div class="sub" id="dailyTrades">\u0627\u0644\u064a\u0648\u0645: 0 / 25</div></div>
+            <div class="glass"><div class="card-title">\u0631\u0628\u062d/\u062e\u0633\u0627\u0631\u0629 \u0627\u0644\u064a\u0648\u0645</div><div class="card-value" id="dailyPnl">0.00</div><div class="sub" id="winRate">\u0646\u0633\u0628\u0629 \u0627\u0644\u0646\u062c\u0627\u062d: \u2014</div></div>
+            <div class="glass"><div class="card-title">\u0645\u0633\u062a\u0648\u0649 \u0627\u0644\u0645\u062e\u0627\u0637\u0631</div><div class="card-value" id="riskLevel">\u2014</div><div class="sub" id="drawdown">\u0627\u0644\u062f\u0631\u0648\u062f\u0627\u0648\u0646: \u2014</div></div>
+        </div>
+        <div class="section-title">\U0001f7e2 \u0627\u0644\u0635\u0641\u0642\u0627\u062a \u0627\u0644\u0645\u0641\u062a\u0648\u062d\u0629</div>
+        <div class="glass" style="padding:0;overflow:hidden;">
+            <table><thead><tr><th>\u0627\u0644\u0645\u0639\u0631\u0641</th><th>\u0627\u0644\u0627\u062a\u062c\u0627\u0647</th><th>\u0627\u0644\u062f\u062e\u0648\u0644</th><th>\u0633\u062a\u0648\u0628</th><th>\u062a\u064a\u0643</th><th>\u0627\u0644\u0633\u0628\u0628</th><th>\u0627\u0644\u0648\u0642\u062a</th></tr></thead>
+            <tbody id="openTradesBody"><tr><td colspan="7" class="empty">\u0644\u0627 \u062a\u0648\u062c\u062f \u0635\u0641\u0642\u0627\u062a \u0645\u0641\u062a\u0648\u062d\u0629</td></tr></tbody></table>
+        </div>
+        <div class="section-title">\U0001f4cb \u0633\u062c\u0644 \u0627\u0644\u0635\u0641\u0642\u0627\u062a \u0627\u0644\u0645\u063a\u0644\u0642\u0629</div>
+        <div class="glass" style="padding:0;overflow:hidden;">
+            <table><thead><tr><th>\u0627\u0644\u0645\u0639\u0631\u0641</th><th>\u0627\u0644\u0627\u062a\u062c\u0627\u0647</th><th>\u0627\u0644\u062f\u062e\u0648\u0644</th><th>\u0627\u0644\u062e\u0631\u0648\u062c</th><th>\u0627\u0644\u0631\u0628\u062d</th><th>\u0627\u0644\u0633\u0628\u0628</th><th>\u0648\u0642\u062a \u0627\u0644\u0625\u063a\u0644\u0627\u0642</th></tr></thead>
+            <tbody id="closedTradesBody"><tr><td colspan="7" class="empty">\u0644\u0627 \u062a\u0648\u062c\u062f \u0635\u0641\u0642\u0627\u062a \u0645\u063a\u0644\u0642\u0629 \u0628\u0639\u062f</td></tr></tbody></table>
+        </div>
+        <div class="section-title">\U0001f56f \u0622\u062e\u0631 \u0623\u0646\u0645\u0627\u0637 \u0627\u0644\u0634\u0645\u0648\u0639 \u0627\u0644\u064a\u0627\u0628\u0627\u0646\u064a\u0629</div>
+        <div class="glass"><div id="patternsList" style="display:flex;flex-wrap:wrap;gap:10px;"><span class="empty">\u0628\u0627\u0646\u062a\u0638\u0627\u0631 \u0627\u0644\u062a\u062d\u0644\u064a\u0644...</span></div></div>
+        <footer>VIP.BOT \u2014 Professional XAUUSD Scalper \u00b7 Glass Dashboard \u00b7 Powered by Japanese Candlesticks</footer>
+    </div>
+    <script>
+        let lastPrice = 0;
+        async function refresh() {
+            try {
+                const res = await fetch('/api/status');
+                const d = await res.json();
+                const p = d.price || {};
+                const mid = p.mid || p.bid || 0;
+                const el = document.getElementById('price');
+                el.textContent = mid ? mid.toFixed(2) : '\u2014';
+                if (lastPrice && mid > lastPrice) el.className = 'card-value price-up';
+                else if (lastPrice && mid < lastPrice) el.className = 'card-value price-down';
+                lastPrice = mid;
+                document.getElementById('spread').textContent = p.spread ? '\u0633\u0628\u0631\u064a\u062f: ' + p.spread.toFixed(2) : '\u0633\u0628\u0631\u064a\u062f: \u2014';
+                document.getElementById('openCount').textContent = d.open_trades_count || 0;
+                document.getElementById('dailyTrades').textContent = '\u0627\u0644\u064a\u0648\u0645: ' + (d.daily_trades||0) + ' / ' + (d.daily_limit||25);
+                const pnl = d.daily_pnl || 0;
+                const pnlEl = document.getElementById('dailyPnl');
+                pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
+                pnlEl.className = 'card-value ' + (pnl >= 0 ? 'price-up' : 'price-down');
+                document.getElementById('winRate').textContent = '\u0646\u0633\u0628\u0629 \u0627\u0644\u0646\u062c\u0627\u062d: ' + (d.win_rate||0) + '%';
+                document.getElementById('riskLevel').textContent = d.risk_level || '\u2014';
+                document.getElementById('drawdown').textContent = '\u0627\u0644\u062f\u0631\u0648\u062f\u0627\u0648\u0646: ' + ((d.drawdown||0)*100).toFixed(1) + '%';
+                document.getElementById('botStatus').textContent = d.running ? '\u064a\u0639\u0645\u0644 \u0627\u0644\u0622\u0646' : '\u0645\u062a\u0648\u0642\u0641';
+                document.getElementById('statusDot').style.background = d.running ? 'var(--accent)' : 'var(--danger)';
+                const openBody = document.getElementById('openTradesBody');
+                const opens = d.open_trades || [];
+                if (opens.length === 0) openBody.innerHTML = '<tr><td colspan="7" class="empty">\u0644\u0627 \u062a\u0648\u062c\u062f \u0635\u0641\u0642\u0627\u062a \u0645\u0641\u062a\u0648\u062d\u0629</td></tr>';
+                else openBody.innerHTML = opens.map(t => `<tr><td><code>${t.trade_id}</code></td><td><span class="badge ${t.direction==='BUY'?'badge-buy':'badge-sell'}">${t.direction==='BUY'?'\u0634\u0631\u0627\u0621':'\u0628\u064a\u0639'}</span></td><td>${t.entry_price}</td><td>${t.stop_loss}</td><td>${t.take_profit}</td><td class="reason-cell" title="${t.reason||''}">${t.reason||'\u2014'}</td><td>${(t.entry_time||'').slice(11,19)}</td></tr>`).join('');
+                const closedBody = document.getElementById('closedTradesBody');
+                const closed = (d.closed_trades || []).slice().reverse();
+                if (closed.length === 0) closedBody.innerHTML = '<tr><td colspan="7" class="empty">\u0644\u0627 \u062a\u0648\u062c\u062f \u0635\u0641\u0642\u0627\u062a \u0645\u063a\u0644\u0642\u0629 \u0628\u0639\u062f</td></tr>';
+                else closedBody.innerHTML = closed.map(t => `<tr><td><code>${t.trade_id}</code></td><td><span class="badge ${t.direction==='BUY'?'badge-buy':'badge-sell'}">${t.direction==='BUY'?'\u0634\u0631\u0627\u0621':'\u0628\u064a\u0639'}</span></td><td>${t.entry_price}</td><td>${t.exit_price||'\u2014'}</td><td class="${(t.profit||0)>=0?'profit-pos':'profit-neg'}">${t.profit!=null?(t.profit>=0?'+':'')+t.profit.toFixed(2):'\u2014'}</td><td class="reason-cell">${t.exit_reason||t.reason||'\u2014'}</td><td>${(t.exit_time||'').slice(11,19)}</td></tr>`).join('');
+                const pats = d.latest_patterns || [];
+                const pEl = document.getElementById('patternsList');
+                if (pats.length === 0) pEl.innerHTML = '<span class="empty">\u0628\u0627\u0646\u062a\u0638\u0627\u0631 \u0627\u0644\u062a\u062d\u0644\u064a\u0644...</span>';
+                else pEl.innerHTML = pats.map(p => `<span class="badge ${p.direction==='BUY'?'badge-buy':p.direction==='SELL'?'badge-sell':'badge-open'}" title="${p.description||''}">${p.name_ar || p.name} (${(p.strength*100).toFixed(0)}%)</span>`).join('');
+            } catch(e) { console.error(e); document.getElementById('botStatus').textContent = '\u062e\u0637\u0623 \u0641\u064a \u0627\u0644\u0627\u062a\u0635\u0627\u0644'; }
+        }
+        refresh();
+        setInterval(refresh, 3000);
+    </script>
+</body>
+</html>
