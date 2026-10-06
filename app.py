@@ -1,7 +1,7 @@
 """
 VIP.BOT - Main Application
 Glass Dashboard + Aggressive Japanese Candlestick Scalper
-Ready for Render deployment
+OHLC display + 400 candles multi-TF + last 20 for entry
 """
 
 import asyncio
@@ -42,9 +42,11 @@ class VIPBotEngine:
     def __init__(self):
         self.running = False
         self.last_price: Optional[Dict] = None
+        self.last_ohlc: Optional[Dict] = None
         self.latest_patterns: List[Dict] = []
         self.last_cycle: Optional[Dict] = None
         self.cycle_count = 0
+        self.multi_tf_count: Dict[str, int] = {}
         self._task: Optional[asyncio.Task] = None
 
     async def start(self):
@@ -96,20 +98,35 @@ class VIPBotEngine:
                 return
 
             try:
-                candles = await data_cache.get_candles(client, "1m", 200)
+                multi = await client.get_multiple_timeframes(
+                    ["1m", "5m", "15m", "30m", "1h", "4h"]
+                )
+                candles = multi.get("1m") or await data_cache.get_candles(client, "1m", 400)
+                self.multi_tf_count = {tf: len(cs) for tf, cs in multi.items()}
             except Exception as e:
                 logger.error(f"Candles fetch failed: {e}")
                 return
 
-            if len(candles) < 15:
+            if len(candles) < 20:
                 logger.warning("Not enough candles")
                 return
 
+            last = candles[-1]
+            self.last_ohlc = {
+                "timeframe": "1m",
+                "open": round(last.open, 3),
+                "high": round(last.high, 3),
+                "low": round(last.low, 3),
+                "close": round(last.close, 3),
+                "volume": last.volume,
+                "timestamp": last.timestamp.isoformat(),
+                "is_bullish": last.is_bullish,
+            }
+
             analysis = technical_analyzer.analyze(candles, "1m")
-            patterns = pattern_detector.detect_all_patterns(candles[-15:])
+            patterns = pattern_detector.detect_all_patterns(candles[-20:])
             self.latest_patterns = [p.to_dict() for p in patterns[:6]]
 
-            # Check open trades (TP1/TP2/TP3/BE/SL/TIME)
             for trade in list(scalping_strategy.open_trades):
                 closed, event = scalping_strategy.check_exit(trade, current)
                 if event and telegram_sender.is_configured:
@@ -132,17 +149,19 @@ class VIPBotEngine:
             result.update({
                 "status": "ok",
                 "price": current,
+                "ohlc": self.last_ohlc,
                 "signal": signal.to_dict() if signal else None,
                 "executed": executed.to_dict() if executed else None,
                 "open_count": len(scalping_strategy.open_trades),
                 "patterns_count": len(patterns),
+                "multi_tf": self.multi_tf_count,
                 "elapsed": round(elapsed, 3)
             })
             self.last_cycle = result
             logger.info(
-                f"Cycle #{self.cycle_count} | Price={current:.2f} | "
+                f"Cycle #{self.cycle_count} | Close={current:.2f} | "
                 f"Open={len(scalping_strategy.open_trades)} | "
-                f"Patterns={len(patterns)} | {elapsed:.2f}s"
+                f"Patterns={len(patterns)} | TF={self.multi_tf_count} | {elapsed:.2f}s"
             )
 
     def get_status(self) -> Dict[str, Any]:
@@ -152,6 +171,8 @@ class VIPBotEngine:
             "running": self.running,
             "cycle_count": self.cycle_count,
             "price": self.last_price,
+            "ohlc": self.last_ohlc,
+            "multi_tf_count": self.multi_tf_count,
             "open_trades": scalping_strategy.get_open_trades_dict(),
             "open_trades_count": len(scalping_strategy.open_trades),
             "closed_trades": scalping_strategy.get_closed_trades_dict(40),
@@ -164,7 +185,7 @@ class VIPBotEngine:
             "latest_patterns": self.latest_patterns,
             "last_cycle": self.last_cycle,
             "account_balance": metrics.get("account_balance", 10000),
-            "version": "2.0.0-glass"
+            "version": "2.1.0-ohlc"
         }
 
 
@@ -174,7 +195,7 @@ engine = VIPBotEngine()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 50)
-    logger.info("VIP.BOT Glass Edition starting...")
+    logger.info("VIP.BOT OHLC Edition starting...")
     logger.info(f"Telegram configured: {bool(config.telegram.BOT_TOKEN)}")
     logger.info(f"Channel: {config.telegram.CHANNEL_ID}")
     logger.info(f"Port: {config.web.PORT}")
@@ -191,7 +212,7 @@ async def lifespan(app: FastAPI):
     await engine.stop()
 
 
-app = FastAPI(title="VIP.BOT", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="VIP.BOT", version="2.1.0", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 
 if os.path.isdir("static"):
@@ -207,20 +228,10 @@ async def dashboard(request: Request):
             return templates.TemplateResponse("dashboard.html", {"request": request})
         except Exception as e2:
             logger.error(f"Dashboard template error: {e2}", exc_info=True)
-            return HTMLResponse(
-                content=f"<html><body style='background:#0f0c29;color:#fff;font-family:sans-serif;text-align:center;padding:40px'>"
-                        f"<h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p>"
-                        f"<pre>{e2}</pre></body></html>",
-                status_code=200
-            )
+            return HTMLResponse(content=f"<html><body style='background:#0f0c29;color:#fff;text-align:center;padding:40px'><h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p><pre>{e2}</pre></body></html>", status_code=200)
     except Exception as e:
-        logger.error(f"Dashboard template error: {e}", exc_info=True)
-        return HTMLResponse(
-            content=f"<html><body style='background:#0f0c29;color:#fff;font-family:sans-serif;text-align:center;padding:40px'>"
-                    f"<h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p>"
-                    f"<pre>{e}</pre></body></html>",
-            status_code=200
-        )
+        logger.error(f"Dashboard template error: {e}", exp_info=True)
+        return HTMLResponse(content=f"<html><body style='background:#0f0c29;color:#fff;text-align:center;padding:40px'><h1>VIP.BOT</h1><p><a style='color:#00d4aa' href='/api/status'>status</a></p><pre>{e}</pre></body></html>", status_code=200)
 
 
 @app.get("/api/status")
@@ -239,7 +250,7 @@ async def health():
 
 @app.get("/api/price")
 async def api_price():
-    return engine.last_price or {}
+    return {"price": engine.last_price, "ohlc": engine.last_ohlc}
 
 
 @app.post("/api/start")
